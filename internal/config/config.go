@@ -27,13 +27,27 @@ const (
 	PermModeBypass PermissionMode = "bypass"
 )
 
+// ProviderConfig holds per-provider API settings.
+type ProviderConfig struct {
+	APIKey          string `mapstructure:"api_key"`
+	BaseURL         string `mapstructure:"base_url"`
+	Model           string `mapstructure:"model"`
+	ReasoningEffort string `mapstructure:"reasoning_effort"` // DeepSeek R1: "max" or ""
+	ThinkingBudget  int    `mapstructure:"thinking_budget"`  // Claude extended thinking tokens
+}
+
 // Config holds all application configuration.
 type Config struct {
-	// Provider settings
+	// Active provider name
 	APIProvider Provider `mapstructure:"api_provider"`
-	APIKey      string   `mapstructure:"api_key"`
-	BaseURL     string   `mapstructure:"base_url"`
-	Model       string   `mapstructure:"model"`
+
+	// Per-provider configurations (takes priority over flat fields)
+	Providers map[string]ProviderConfig `mapstructure:"providers"`
+
+	// Flat provider fields — kept for backward compatibility and single-provider ergonomics
+	APIKey  string `mapstructure:"api_key"`
+	BaseURL string `mapstructure:"base_url"`
+	Model   string `mapstructure:"model"`
 
 	// Engine settings
 	MaxTurns    int     `mapstructure:"max_turns"`
@@ -60,6 +74,21 @@ type Config struct {
 	// Internal paths
 	ConfigDir string `mapstructure:"-"`
 	DataDir   string `mapstructure:"-"`
+}
+
+// ActiveProviderConfig resolves the effective configuration for the active provider.
+// Providers map takes priority over flat fields.
+func (c *Config) ActiveProviderConfig() ProviderConfig {
+	if c.Providers != nil {
+		if pc, ok := c.Providers[string(c.APIProvider)]; ok {
+			return pc
+		}
+	}
+	return ProviderConfig{
+		APIKey:  c.APIKey,
+		BaseURL: c.BaseURL,
+		Model:   c.Model,
+	}
 }
 
 // Validate checks the configuration for errors.

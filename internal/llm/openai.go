@@ -120,6 +120,9 @@ func (c *OpenAIClient) Close() error {
 	return nil
 }
 
+// Adapter returns nil — OpenAI adapter is not yet extracted.
+func (c *OpenAIClient) Adapter() ProviderAdapter { return nil }
+
 func (c *OpenAIClient) buildRequest(req *ChatRequest, stream bool) map[string]interface{} {
 	apiReq := map[string]interface{}{
 		"model":       req.Model,

@@ -16,6 +16,9 @@ type LLMClient interface {
 
 	// Close releases underlying resources.
 	Close() error
+
+	// Adapter returns the provider adapter for message formatting and feature introspection.
+	Adapter() ProviderAdapter
 }
 
 // ChatRequest is a provider-agnostic request shape.

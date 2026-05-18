@@ -72,6 +72,8 @@ func (m *mockLLMClient) ChatStream(ctx context.Context, req *llm.ChatRequest) (<
 
 func (m *mockLLMClient) Close() error { return nil }
 
+func (m *mockLLMClient) Adapter() llm.ProviderAdapter { return nil }
+
 // echoTool is a test tool that echoes its input.
 type echoTool struct {
 	tool.BaseTool

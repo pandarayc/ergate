@@ -59,7 +59,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	// Override from specific env vars (viper's AutomaticEnv is case-sensitive in some cases)
+	// Override from specific env vars
 	if k := os.Getenv("ERGATE_API_KEY"); k != "" {
 		cfg.APIKey = k
 	}
@@ -74,6 +74,18 @@ func Load(configPath string) (*Config, error) {
 	}
 	if m := os.Getenv("ERGATE_MODEL"); m != "" {
 		cfg.Model = m
+	}
+
+	// Resolve provider config: fill in from flat fields if not in providers map
+	pc := cfg.ActiveProviderConfig()
+	if pc.Model != "" {
+		cfg.Model = pc.Model
+	}
+	if pc.APIKey != "" {
+		cfg.APIKey = pc.APIKey
+	}
+	if pc.BaseURL != "" {
+		cfg.BaseURL = pc.BaseURL
 	}
 
 	// Resolve session dir

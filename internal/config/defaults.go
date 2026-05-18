@@ -4,7 +4,6 @@ package config
 func DefaultConfig() *Config {
 	return &Config{
 		APIProvider:    ProviderAnthropic,
-		BaseURL:        "",
 		Model:          "claude-sonnet-4-20250514",
 		MaxTurns:       25,
 		MaxTokens:      8192,
