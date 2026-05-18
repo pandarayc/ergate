@@ -8,9 +8,9 @@ import (
 )
 
 // Run starts the bubbletea TUI.
-func Run(cfg *config.Config, eng *engine.Engine) error {
+func Run(cfg *config.Config, eng *engine.Engine, resume bool) error {
 	store, _ := session.NewStore(cfg.SessionDir)
-	m := NewModel(cfg, eng, store)
+	m := NewModel(cfg, eng, store, resume)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	_, err := p.Run()
 	return err

@@ -9,7 +9,7 @@ import (
 	"github.com/raydraw/ergate/internal/llm"
 )
 
-// Provider represents an LLM API provider.
+// Provider represents an LLM API provider label.
 type Provider string
 
 const (
@@ -27,24 +27,35 @@ const (
 	PermModeBypass PermissionMode = "bypass"
 )
 
-// ProviderConfig holds per-provider API settings.
-type ProviderConfig struct {
-	APIKey          string `mapstructure:"api_key"`
-	BaseURL         string `mapstructure:"base_url"`
-	Model           string `mapstructure:"model"`
-	ReasoningEffort string `mapstructure:"reasoning_effort"` // DeepSeek R1: "max" or ""
+// CompatType declares the API protocol a provider speaks.
+const (
+	CompatAnthropic = "anthropic"
+	CompatOpenAI    = "openai"
+)
+
+// ModelOptions holds per-model configuration.
+type ModelOptions struct {
+	ReasoningEffort string `mapstructure:"reasoning_effort"` // DeepSeek R1: "" | "max" | "high" | ...
 	ThinkingBudget  int    `mapstructure:"thinking_budget"`  // Claude extended thinking tokens
+}
+
+// ProviderConfig holds per-provider transport and model catalog.
+type ProviderConfig struct {
+	Compat  string                  `mapstructure:"compat"`   // API protocol: "anthropic" | "openai"
+	APIKey  string                  `mapstructure:"api_key"`
+	BaseURL string                  `mapstructure:"base_url"`
+	Models  map[string]ModelOptions `mapstructure:"models"`
 }
 
 // Config holds all application configuration.
 type Config struct {
-	// Active provider name
+	// Active provider label — key into Providers map
 	APIProvider Provider `mapstructure:"api_provider"`
 
-	// Per-provider configurations (takes priority over flat fields)
+	// Per-provider configurations
 	Providers map[string]ProviderConfig `mapstructure:"providers"`
 
-	// Flat provider fields — kept for backward compatibility and single-provider ergonomics
+	// Flat fields — backward compatible, overridden by provider config
 	APIKey  string `mapstructure:"api_key"`
 	BaseURL string `mapstructure:"base_url"`
 	Model   string `mapstructure:"model"`
@@ -68,6 +79,9 @@ type Config struct {
 	Headless bool   `mapstructure:"headless"`
 	Theme    string `mapstructure:"theme"`
 
+	// Sub-agent model (falls back to Model if empty)
+	SubagentModel string `mapstructure:"subagent_model"`
+
 	// Feature flags
 	EnableMCP bool `mapstructure:"enable_mcp"`
 
@@ -76,8 +90,7 @@ type Config struct {
 	DataDir   string `mapstructure:"-"`
 }
 
-// ActiveProviderConfig resolves the effective configuration for the active provider.
-// Providers map takes priority over flat fields.
+// ActiveProviderConfig resolves the provider configuration for the active provider.
 func (c *Config) ActiveProviderConfig() ProviderConfig {
 	if c.Providers != nil {
 		if pc, ok := c.Providers[string(c.APIProvider)]; ok {
@@ -87,13 +100,43 @@ func (c *Config) ActiveProviderConfig() ProviderConfig {
 	return ProviderConfig{
 		APIKey:  c.APIKey,
 		BaseURL: c.BaseURL,
-		Model:   c.Model,
 	}
+}
+
+// ActiveModelOptions returns per-model options for the currently selected model.
+func (c *Config) ActiveModelOptions() ModelOptions {
+	if c.Providers != nil {
+		if pc, ok := c.Providers[string(c.APIProvider)]; ok {
+			if pc.Models != nil {
+				if mo, ok := pc.Models[c.Model]; ok {
+					return mo
+				}
+			}
+		}
+	}
+	return ModelOptions{}
+}
+
+// SubagentModelName returns the model for sub-agents, falling back to the main model.
+func (c *Config) SubagentModelName() string {
+	if c.SubagentModel != "" {
+		return c.SubagentModel
+	}
+	return c.Model
+}
+
+// CompatProvider returns the protocol type to use for LLM client creation.
+// Falls back to api_provider if compat is not set in provider config.
+func (c *Config) CompatProvider() string {
+	if pc := c.ActiveProviderConfig(); pc.Compat != "" {
+		return pc.Compat
+	}
+	return string(c.APIProvider)
 }
 
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
-	if c.APIKey == "" {
+	if pc := c.ActiveProviderConfig(); pc.APIKey == "" && c.APIKey == "" {
 		return errors.New("api_key is required (set ERGATE_API_KEY env var or api_key in config)")
 	}
 	if c.Model == "" {
@@ -108,8 +151,9 @@ func (c *Config) Validate() error {
 	if c.Temperature < 0 || c.Temperature > 2 {
 		return errors.New("temperature must be between 0 and 2")
 	}
-	if !llm.IsRegistered(string(c.APIProvider)) {
-		return fmt.Errorf("unsupported api_provider: %q", c.APIProvider)
+	compat := c.CompatProvider()
+	if !llm.IsRegistered(compat) {
+		return fmt.Errorf("unsupported protocol %q (check api_provider or compat in config)", compat)
 	}
 	switch c.PermissionMode {
 	case PermModeAlways, PermModeNormal, PermModeBypass:

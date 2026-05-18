@@ -27,7 +27,8 @@ func SetupEngine(cfg *config.Config) (llm.LLMClient, *tool.Registry, *skill.Regi
 		return nil, nil, nil, err
 	}
 
-	client, err := llm.NewLLMClient(string(cfg.APIProvider), cfg.APIKey, cfg.BaseURL)
+	pc := cfg.ActiveProviderConfig()
+	client, err := llm.NewLLMClient(cfg.CompatProvider(), pc.APIKey, pc.BaseURL)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -38,7 +39,7 @@ func SetupEngine(cfg *config.Config) (llm.LLMClient, *tool.Registry, *skill.Regi
 	// Load skills
 	skillReg := skill.NewRegistry()
 	cwd, _ := os.Getwd()
-	skillReg.LoadDir(filepath.Join(cwd, ".claude", "skills"))
+	skillReg.LoadDir(filepath.Join(cwd, ".ergate", "skills"))
 
 	// MCP: connect to configured servers and register their tools
 	if cfg.EnableMCP {
@@ -75,7 +76,7 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 	registry.Register(task.NewOutputTool(taskReg))
 	registry.Register(task.NewStopTool(taskReg))
 	registry.Register(task.NewListTool(taskReg))
-	registry.Register(task.NewAgentTool(taskReg, client, cfg.Model, registry))
+	registry.Register(task.NewAgentTool(taskReg, client, cfg.SubagentModelName(), registry))
 	eng.SetTaskNotify(taskReg.NotifyChan())
 
 	cwd, _ := os.Getwd()
@@ -125,8 +126,8 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 }
 
 // StartTUI starts the bubbletea TUI.
-func StartTUI(cfg *config.Config, eng *engine.Engine) error {
-	return tui.Run(cfg, eng)
+func StartTUI(cfg *config.Config, eng *engine.Engine, resume bool) error {
+	return tui.Run(cfg, eng, resume)
 }
 
 // connectMCPServers reads MCP server configs from .ergate/mcp.json and registers their tools.

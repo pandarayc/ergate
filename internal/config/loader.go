@@ -76,11 +76,8 @@ func Load(configPath string) (*Config, error) {
 		cfg.Model = m
 	}
 
-	// Resolve provider config: fill in from flat fields if not in providers map
+	// Resolve api_key and base_url from provider config (flat fields take priority)
 	pc := cfg.ActiveProviderConfig()
-	if pc.Model != "" {
-		cfg.Model = pc.Model
-	}
 	if pc.APIKey != "" {
 		cfg.APIKey = pc.APIKey
 	}

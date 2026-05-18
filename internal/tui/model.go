@@ -67,7 +67,7 @@ type Model struct {
 }
 
 // NewModel creates a new TUI model.
-func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store) Model {
+func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resume bool) Model {
 	ti := textinput.New()
 	ti.Placeholder = "Type a message..."
 	ti.Prompt = "▸ "
@@ -85,8 +85,8 @@ func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store) Mode
 		sessionStore: store,
 	}
 
-	// Auto-restore latest session
-	if store != nil {
+	// Auto-restore latest session only when -r/--resume flag is set
+	if resume && store != nil {
 		if sess, err := store.Latest(); err == nil && sess != nil {
 			eng.ImportSession(engine.SessionData{
 				Messages: sess.Messages,
@@ -454,8 +454,13 @@ func (m *Model) handleEngineEvent(event engine.Event) {
 
 	case engine.EventThinking:
 		if text, ok := event.Data.(string); ok {
-			m.messages = append(m.messages, ChatMessage{Role: "thinking", Content: text})
-		}
+			n := len(m.messages)
+			if n > 0 && m.messages[n-1].Role == "thinking" {
+				m.messages[n-1].Content += text
+			} else {
+				m.messages = append(m.messages, ChatMessage{Role: "thinking", Content: text})
+			}
+			}
 
 	case engine.EventToolUse:
 		if data, ok := event.Data.(map[string]any); ok {

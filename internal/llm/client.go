@@ -23,12 +23,13 @@ type LLMClient interface {
 
 // ChatRequest is a provider-agnostic request shape.
 type ChatRequest struct {
-	Model       string       `json:"model"`
-	System      string       `json:"system,omitempty"`
-	Messages    []Message    `json:"messages"`
-	Tools       []ToolConfig `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens"`
-	Temperature float64      `json:"temperature,omitempty"`
+	Model          string       `json:"model"`
+	System         string       `json:"system,omitempty"`
+	Messages       []Message    `json:"messages"`
+	Tools          []ToolConfig `json:"tools,omitempty"`
+	MaxTokens      int          `json:"max_tokens"`
+	Temperature    float64      `json:"temperature,omitempty"`
+	ThinkingBudget int          `json:"-"` // Claude extended thinking token budget (0 = disabled)
 }
 
 // ChatResponse is the provider-agnostic response shape.

@@ -1,44 +1,66 @@
-# Ergate configuration example
-# Copy this file to ~/.config/ergate/config.yaml
+# Ergate configuration
+# Copy to ~/.config/ergate/config.yaml or .ergate/config.yaml
 
-# LLM provider: "anthropic" | "openai" | "deepseek"
-# Use "openai" with custom base_url for any OpenAI-compatible API
-api_provider: "anthropic"
+# Active provider label — key into the providers map
+api_provider: "deepseek"
 
-# Your API key (can also be set via ERGATE_API_KEY env var)
-# api_key: "sk-ant-..."
+# Currently active model (must exist in the active provider's models)
+model: "deepseek-v4-pro"
 
-# Base URL for the API
-base_url: "https://api.anthropic.com/v1"
+# Per-provider configuration
+# compat = API protocol adapter: "anthropic" | "openai"
+providers:
+  anthropic:
+    compat: "anthropic"
+    api_key: "sk-ant-..."
+    # base_url: ""                      # defaults to https://api.anthropic.com/v1
+    models:
+      claude-sonnet-4-20250514:
+        thinking_budget: 16000          # Claude extended thinking (tokens)
+      claude-haiku-4-5-20251001: {}     # no special options
 
-# Model to use
-model: "claude-sonnet-4-20250514"
+  openai:
+    compat: "openai"
+    api_key: "sk-..."
+    # base_url: ""                      # defaults to https://api.openai.com/v1
+    models:
+      gpt-4o: {}
+      gpt-4o-mini: {}
+
+  deepseek:
+    compat: "openai"                    # DeepSeek speaks OpenAI protocol
+    api_key: "sk-..."
+    base_url: "https://api.deepseek.com"
+    models:
+      deepseek-chat: {}
+      deepseek-reasoner:
+        reasoning_effort: "max"         # DeepSeek R1: "" | "min" | "low" | "medium" | "high" | "max"
+
+  # Anthropic-compatible endpoint serving multiple models (e.g. gateway)
+  deepseek-anthropic:
+    compat: "anthropic"                 # uses Anthropic protocol adapter
+    api_key: "sk-..."
+    base_url: "https://api.deepseek.com/anthropic"
+    models:
+      claude-sonnet-4-20250514:
+        thinking_budget: 16000
 
 # Engine settings
 max_turns: 25
 max_tokens: 8192
 temperature: 0
 
-# Permissions: "always" (auto-approve everything), "normal" (prompt), "bypass" (no prompts)
+# Permissions: "always" | "normal" | "bypass"
 permission_mode: "normal"
-
-# Allowed paths (empty = no restrictions)
-# allowed_paths:
-#   - /home/user/projects
-
-# Blocked shell commands
-# blocked_commands:
-#   - rm -rf /
-#   - sudo
 
 # Session storage
 # session_dir: "~/.local/share/ergate/sessions"
 
-# Theme: "dark" or "light"
+# Theme: "dark" | "light"
 theme: "dark"
 
-# Headless mode (no TUI)
+# Headless mode (no TUI, useful for scripting)
 # headless: false
 
-# Feature flags
+# Enable MCP (Model Context Protocol) server integration
 # enable_mcp: false

@@ -14,6 +14,7 @@ var (
 	headless   bool
 	modelName  string
 	prompt     string
+	resume     bool
 	version    = "0.1.0"
 )
 
@@ -34,6 +35,7 @@ Default mode is interactive TUI. Use -p for one-shot queries, --headless for raw
 	cmd.Flags().BoolVar(&headless, "headless", false, "Run in headless mode (raw REPL, no TUI)")
 	cmd.Flags().StringVarP(&modelName, "model", "m", "", "Override the model name")
 	cmd.Flags().StringVarP(&prompt, "prompt", "p", "", "One-shot query (non-interactive)")
+	cmd.Flags().BoolVarP(&resume, "resume", "r", false, "Resume the latest session")
 	cmd.Flags().BoolP("version", "v", false, "Show version")
 
 	return cmd
@@ -80,7 +82,7 @@ func runTUI(cfg *appconfig.Config) error {
 	defer client.Close()
 
 	eng := CreateEngine(cfg, client, registry, skillReg)
-	return StartTUI(cfg, eng)
+	return StartTUI(cfg, eng, resume)
 }
 
 // runOneShot executes a single prompt and prints the result.

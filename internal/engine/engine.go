@@ -238,6 +238,7 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 		// Process streaming events
 		var (
 			textBuf       strings.Builder
+			thinkingBuf   strings.Builder
 			toolUseBlocks []llm.ToolUseBlock
 			currentTool   *llm.ToolUseBlock
 		)
@@ -260,6 +261,15 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 					events <- Event{Type: EventText, Data: textData.Text, Turn: turn}
 				}
 
+			case llm.EventThinking:
+				var thinkData struct {
+					Thinking string `json:"thinking"`
+				}
+				if err := json.Unmarshal(event.Data, &thinkData); err == nil {
+					thinkingBuf.WriteString(thinkData.Thinking)
+					events <- Event{Type: EventThinking, Data: thinkData.Thinking, Turn: turn}
+				}
+
 			case llm.EventToolUseStart:
 				var toolData struct {
 					ID    string `json:"id"`
@@ -276,22 +286,11 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 			case llm.EventToolUseEnd:
 				if currentTool != nil {
 					var toolData struct {
-						ID    string          `json:"id"`
-						Name  string          `json:"name"`
 						Input json.RawMessage `json:"input"`
 					}
 					if err := json.Unmarshal(event.Data, &toolData); err == nil && toolData.Input != nil {
 						currentTool.Input = toolData.Input
 					} else {
-						var partialData struct {
-							PartialJSON string `json:"partial_json"`
-						}
-						if err := json.Unmarshal(event.Data, &partialData); err == nil && partialData.PartialJSON != "" {
-							currentTool.Input = json.RawMessage(partialData.PartialJSON)
-						}
-					}
-
-					if currentTool.Input == nil {
 						currentTool.Input = json.RawMessage("{}")
 					}
 
@@ -332,7 +331,7 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 		}
 
 		// Build assistant message
-		assistantMsg := e.buildAssistantMessage(textBuf.String(), toolUseBlocks)
+		assistantMsg := e.buildAssistantMessage(textBuf.String(), thinkingBuf.String(), toolUseBlocks)
 
 		e.mu.Lock()
 		e.messages = append(e.messages, assistantMsg)
@@ -360,13 +359,15 @@ func (e *Engine) buildRequest() *llm.ChatRequest {
 	copy(messages, e.messages)
 	e.mu.Unlock()
 
+	opts := e.cfg.ActiveModelOptions()
 	return &llm.ChatRequest{
-		Model:       e.cfg.Model,
-		System:      e.buildSystemPrompt(),
-		Messages:    messages,
-		Tools:       e.tools.ToolConfigs(),
-		MaxTokens:   e.cfg.MaxTokens,
-		Temperature: e.cfg.Temperature,
+		Model:          e.cfg.Model,
+		System:         e.buildSystemPrompt(),
+		Messages:       messages,
+		Tools:          e.tools.ToolConfigs(),
+		MaxTokens:      e.cfg.MaxTokens,
+		Temperature:    e.cfg.Temperature,
+		ThinkingBudget: opts.ThinkingBudget,
 	}
 }
 
@@ -420,9 +421,12 @@ func (e *Engine) addUserMessage(content string) {
 	})
 }
 
-func (e *Engine) buildAssistantMessage(text string, toolUses []llm.ToolUseBlock) llm.Message {
+func (e *Engine) buildAssistantMessage(text, thinking string, toolUses []llm.ToolUseBlock) llm.Message {
 	var blocks []llm.ContentBlock
 
+	if thinking != "" {
+		blocks = append(blocks, llm.ContentBlock{Type: "thinking", Thinking: thinking})
+	}
 	if text != "" {
 		blocks = append(blocks, llm.ContentBlock{Type: "text", Text: text})
 	}

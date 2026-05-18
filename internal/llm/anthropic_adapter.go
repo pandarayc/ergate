@@ -25,6 +25,14 @@ func (AnthropicAdapter) BuildRequestBody(req *ChatRequest) map[string]interface{
 		apiReq["system"] = req.System
 	}
 
+	// Extended thinking
+	if req.ThinkingBudget > 0 {
+		apiReq["thinking"] = map[string]interface{}{
+			"type":         "enabled",
+			"budget_tokens": req.ThinkingBudget,
+		}
+	}
+
 	messages := make([]map[string]interface{}, 0, len(req.Messages))
 	for _, msg := range req.Messages {
 		m := map[string]interface{}{
@@ -64,6 +72,8 @@ func anthropicConvertContent(blocks []ContentBlock) interface{} {
 			if b.Cached != nil {
 				item["cache_control"] = b.Cached
 			}
+		case "thinking":
+			item["thinking"] = b.Thinking
 		case "tool_use":
 			item["id"] = b.ID
 			item["name"] = b.Name
