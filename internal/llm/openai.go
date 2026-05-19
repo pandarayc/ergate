@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 func init() {
@@ -28,6 +29,7 @@ type OpenAIClient struct {
 	apiKey     string
 	baseURL    string
 	httpClient *http.Client
+	adapter    ProviderAdapter
 }
 
 // NewOpenAIClient creates a new OpenAI-compatible API client.
@@ -36,14 +38,19 @@ func NewOpenAIClient(apiKey, baseURL string) *OpenAIClient {
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
 		httpClient: &http.Client{
-			Timeout: 0, // streaming requests can last minutes
+			Timeout: 5 * time.Minute,
 		},
+		adapter: OpenAIAdapter{},
 	}
 }
 
+// Adapter returns the provider adapter for feature introspection.
+func (c *OpenAIClient) Adapter() ProviderAdapter { return c.adapter }
+
 // Chat sends a non-streaming request.
 func (c *OpenAIClient) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	reqBody := c.buildRequest(req, false)
+	reqBody := c.adapter.BuildRequestBody(req)
+	reqBody["stream"] = false
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -51,7 +58,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/chat/completions", bytes.NewReader(body))
+		c.baseURL+c.adapter.Endpoint(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -64,7 +71,8 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, c.parseError(resp, body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+		return nil, c.adapter.ParseErrorResponse(resp.StatusCode, respBody, body)
 	}
 
 	var result openaiChatResponse
@@ -77,7 +85,8 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 
 // ChatStream sends a streaming request.
 func (c *OpenAIClient) ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamEvent, error) {
-	reqBody := c.buildRequest(req, true)
+	reqBody := c.adapter.BuildRequestBody(req)
+	reqBody["stream"] = true
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -85,7 +94,7 @@ func (c *OpenAIClient) ChatStream(ctx context.Context, req *ChatRequest) (<-chan
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.baseURL+"/chat/completions", bytes.NewReader(body))
+		c.baseURL+c.adapter.Endpoint(), bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -98,7 +107,8 @@ func (c *OpenAIClient) ChatStream(ctx context.Context, req *ChatRequest) (<-chan
 
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, c.parseError(resp, body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+		return nil, c.adapter.ParseErrorResponse(resp.StatusCode, respBody, body)
 	}
 
 	events := make(chan StreamEvent, 64)
@@ -111,106 +121,10 @@ func (c *OpenAIClient) Close() error {
 	return nil
 }
 
-// Adapter returns nil — OpenAI adapter is not yet extracted.
-func (c *OpenAIClient) Adapter() ProviderAdapter { return nil }
-
-func (c *OpenAIClient) buildRequest(req *ChatRequest, stream bool) map[string]interface{} {
-	apiReq := map[string]interface{}{
-		"model":       req.Model,
-		"max_tokens":  req.MaxTokens,
-		"stream":      stream,
-		"temperature": req.Temperature,
-	}
-
-	// Messages
-	messages := make([]map[string]interface{}, 0, len(req.Messages)+1)
-	if req.System != "" {
-		messages = append(messages, map[string]interface{}{
-			"role":    "system",
-			"content": req.System,
-		})
-	}
-	for _, msg := range req.Messages {
-		m := map[string]interface{}{
-			"role":    msg.Role,
-			"content": c.convertContent(msg.Content),
-		}
-		if msg.Role == "assistant" {
-			// For assistant messages with tool calls, include tool_calls
-			var toolCalls []map[string]interface{}
-			for _, block := range msg.Content {
-				if block.Type == "tool_use" {
-					tc := map[string]interface{}{
-						"id":   block.ID,
-						"type": "function",
-						"function": map[string]interface{}{
-							"name":      block.Name,
-							"arguments": string(block.Input),
-						},
-					}
-					toolCalls = append(toolCalls, tc)
-				}
-			}
-			if len(toolCalls) > 0 {
-				m["tool_calls"] = toolCalls
-			}
-		}
-		messages = append(messages, m)
-	}
-	apiReq["messages"] = messages
-
-	// Tools → OpenAI format
-	if len(req.Tools) > 0 {
-		tools := make([]map[string]interface{}, 0, len(req.Tools))
-		for _, t := range req.Tools {
-			tool := map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        t.Name,
-					"description": t.Description,
-					"parameters":  json.RawMessage(t.InputSchema),
-				},
-			}
-			tools = append(tools, tool)
-		}
-		apiReq["tools"] = tools
-	}
-
-	return apiReq
-}
-
-func (c *OpenAIClient) convertContent(blocks []ContentBlock) interface{} {
-	// If it's a single text block, return as string
-	if len(blocks) == 1 && blocks[0].Type == "text" {
-		return blocks[0].Text
-	}
-
-	result := make([]map[string]interface{}, 0, len(blocks))
-	for _, b := range blocks {
-		switch b.Type {
-		case "text":
-			result = append(result, map[string]interface{}{"type": "text", "text": b.Text})
-		case "tool_result":
-			result = append(result, map[string]interface{}{
-				"tool_call_id": b.ToolUseID,
-				"role":         "tool",
-				"content":      string(b.Content),
-			})
-		case "image":
-			result = append(result, map[string]interface{}{
-				"type": "image_url",
-				"image_url": map[string]interface{}{
-					"url": b.Text, // assume data URL format
-				},
-			})
-		}
-	}
-	return result
-}
-
 func (c *OpenAIClient) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("Content-Type", "application/json")
+	for k, v := range c.adapter.Headers(c.apiKey) {
+		req.Header.Set(k, v)
+	}
 }
 
 // readSSEStream reads OpenAI SSE stream format (data: lines with [DONE] terminator).
@@ -245,7 +159,7 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue // skip malformed chunks
+			continue
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -253,7 +167,6 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 		}
 		choice := chunk.Choices[0]
 
-		// Text content
 		if choice.Delta.Content != "" {
 			raw, _ := json.Marshal(map[string]string{"text": choice.Delta.Content})
 			events <- StreamEvent{Type: EventText, Data: raw}
@@ -265,7 +178,6 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 			events <- StreamEvent{Type: EventThinking, Data: raw}
 		}
 
-		// Tool calls (streaming)
 		if len(choice.Delta.ToolCalls) > 0 {
 			if toolCalls == nil {
 				toolCalls = make(map[int]*openaiToolCall)
@@ -291,7 +203,6 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 			}
 		}
 
-		// Finish reason indicates tool call is complete
 		if choice.FinishReason == "tool_calls" && toolCalls != nil {
 			for i, tc := range toolCalls {
 				raw, _ := json.Marshal(map[string]interface{}{
@@ -313,6 +224,8 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 
 	events <- StreamEvent{Type: EventDone, Data: json.RawMessage(`{"stop_reason": "stop"}`)}
 }
+
+// --- OpenAI API types ---
 
 type openaiChatResponse struct {
 	ID      string         `json:"id"`
@@ -413,39 +326,6 @@ func (c *OpenAIClient) toChatResponse(resp *openaiChatResponse) *ChatResponse {
 	}
 
 	return result
-}
-
-func (c *OpenAIClient) parseError(resp *http.Response, reqBody []byte) error {
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-
-	var errResp struct {
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-			Code    string `json:"code"`
-		} `json:"error"`
-	}
-
-	if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-		return &APIError{
-			Type:    errResp.Error.Type,
-			Message: errResp.Error.Message,
-			Status:  resp.StatusCode,
-		}
-	}
-
-	return &APIError{
-		Type:    fmt.Sprintf("http_%d", resp.StatusCode),
-		Message: fmt.Sprintf("HTTP %d: %s (req: %s)", resp.StatusCode, string(respBody), truncateReq(reqBody)),
-		Status:  resp.StatusCode,
-	}
-}
-
-func truncateReq(b []byte) string {
-	if len(b) <= 200 {
-		return string(b)
-	}
-	return string(b[:200]) + "..."
 }
 
 func mustMarshal(v interface{}) json.RawMessage {

@@ -453,82 +453,90 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 		PermissionMgr: e.permissions,
 	}
 
+	var resultBlocks []llm.ContentBlock
+
 	for _, tu := range toolUses {
 		// Rule-based permission check
 		behavior := e.checkPermRules(tu.Name, tu.Input)
 		if behavior == tool.BehaviorDeny {
-			e.handleToolResult(tu, nil, fmt.Errorf("permission denied by rule for %s", tu.Name), events, turn)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("permission denied by rule for %s", tu.Name), events, turn))
 			continue
 		}
 
-
-			t, ok := e.tools.Get(tu.Name)
-			if !ok {
-				e.handleToolResult(tu, nil, fmt.Errorf("unknown tool: %q", tu.Name), events, turn)
-				continue
-			}
-
-			// Read-only tools skip interactive permission check in headless mode
-			if !t.IsReadOnly(tu.Input) && e.permissions != nil && behavior == tool.BehaviorAsk {
-				if err := e.permissions.Check(ctx, tu.Name, tu.Input); err != nil {
-					e.handleToolResult(tu, nil, fmt.Errorf("permission denied: %w", err), events, turn)
-					continue
-				}
-			}
-
-			// Pre-tool hook
-			if !e.firePreToolHook(ctx, tu) {
-				e.handleToolResult(tu, nil, fmt.Errorf("tool blocked by hook"), events, turn)
-				continue
-			}
-
-			// Plan mode: block write operations
-			if e.planMgr != nil && e.planMgr.InPlanMode() && !t.IsReadOnly(tu.Input) && tu.Name != "ExitPlanMode" {
-				e.handleToolResult(tu, nil, fmt.Errorf(
-					"plan mode: only read-only tools allowed. Use ExitPlanMode to approve the plan and start implementing."), events, turn)
-				continue
-			}
-
-			// Save file backup before write operations
-			if e.fileTracker != nil && (tu.Name == "Write" || tu.Name == "Edit") {
-				var fileInput struct {
-					FilePath string `json:"file_path"`
-				}
-				if json.Unmarshal(tu.Input, &fileInput) == nil && fileInput.FilePath != "" {
-					if snap, err := e.fileTracker.SaveBackup(fileInput.FilePath); err == nil {
-						events <- Event{Type: EventThinking, Data: fmt.Sprintf("Backup saved: v%d", snap.Version), Turn: turn}
-					}
-				}
-			}
-
-			var result *tool.ToolResult
-			var execErr error
-
-			if t.IsReadOnly(tu.Input) {
-				// Read-only tools execute directly (no confirmation needed)
-				result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-				e.handleToolResult(tu, result, execErr, events, turn)
-			} else if e.permissions != nil {
-				// Write tools need permission
-				allowed, err := e.permissions.Prompt(ctx, tu.Name, fmt.Sprintf("Run %s?", tu.Name))
-				if err != nil || !allowed {
-					e.handleToolResult(tu, nil, fmt.Errorf("user denied permission for %s", tu.Name), events, turn)
-					continue
-				}
-				result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-				e.handleToolResult(tu, result, execErr, events, turn)
-			} else {
-				result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-				e.handleToolResult(tu, result, execErr, events, turn)
-			}
-
-			// Post-tool hook
-			e.firePostToolHook(ctx, tu, result, execErr)
-
-			// Skill auto-triggering: check file paths against conditional skills
-			e.checkSkillTriggers(tu, events, turn)
+		t, ok := e.tools.Get(tu.Name)
+		if !ok {
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("unknown tool: %q", tu.Name), events, turn))
+			continue
 		}
+
+		// Read-only tools skip interactive permission check in headless mode
+		if !t.IsReadOnly(tu.Input) && e.permissions != nil && behavior == tool.BehaviorAsk {
+			if err := e.permissions.Check(ctx, tu.Name, tu.Input); err != nil {
+				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("permission denied: %w", err), events, turn))
+				continue
+			}
+		}
+
+		// Pre-tool hook
+		if !e.firePreToolHook(ctx, tu) {
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("tool blocked by hook"), events, turn))
+			continue
+		}
+
+		// Plan mode: block write operations
+		if e.planMgr != nil && e.planMgr.InPlanMode() && !t.IsReadOnly(tu.Input) && tu.Name != "ExitPlanMode" {
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf(
+				"plan mode: only read-only tools allowed. Use ExitPlanMode to approve the plan and start implementing."), events, turn))
+			continue
+		}
+
+		// Save file backup before write operations
+		if e.fileTracker != nil && (tu.Name == "Write" || tu.Name == "Edit") {
+			var fileInput struct {
+				FilePath string `json:"file_path"`
+			}
+			if json.Unmarshal(tu.Input, &fileInput) == nil && fileInput.FilePath != "" {
+				if snap, err := e.fileTracker.SaveBackup(fileInput.FilePath); err == nil {
+					events <- Event{Type: EventThinking, Data: fmt.Sprintf("Backup saved: v%d", snap.Version), Turn: turn}
+				}
+			}
+		}
+
+		var result *tool.ToolResult
+		var execErr error
+
+		if t.IsReadOnly(tu.Input) {
+			// Read-only tools execute directly (no confirmation needed)
+			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+		} else if e.permissions != nil {
+			// Write tools need permission
+			allowed, err := e.permissions.Prompt(ctx, tu.Name, fmt.Sprintf("Run %s?", tu.Name))
+			if err != nil || !allowed {
+				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("user denied permission for %s", tu.Name), events, turn))
+				continue
+			}
+			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+		} else {
+			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+		}
+
+		// Post-tool hook
+		e.firePostToolHook(ctx, tu, result, execErr)
+
+		// Skill auto-triggering: check file paths against conditional skills
+		e.checkSkillTriggers(tu, events, turn)
 	}
+
+	// Batch all tool results into a single user message (Anthropic API requirement)
+	if len(resultBlocks) > 0 {
+		e.mu.Lock()
+		e.messages = append(e.messages, llm.Message{Role: "user", Content: resultBlocks})
+		e.mu.Unlock()
+	}
+}
 
 	// maybeCompact checks token count and applies compaction if needed.
 	func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int) {
@@ -733,7 +741,7 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 
 	const maxResultChars = 20_000
 
-	func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, err error, events chan<- Event, turn int) {
+	func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, err error, events chan<- Event, turn int) llm.ContentBlock {
 		var content string
 		var isError bool
 
@@ -762,20 +770,13 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			}
 		}
 
-		e.mu.Lock()
 		encoded, _ := json.Marshal(content)
-		e.messages = append(e.messages, llm.Message{
-			Role: "user",
-			Content: []llm.ContentBlock{
-				{
-					Type:      "tool_result",
-					ToolUseID: tu.ID,
-					Content:   json.RawMessage(encoded),
-					IsError:   isError,
-				},
-			},
-		})
-		e.mu.Unlock()
+		block := llm.ContentBlock{
+			Type:      "tool_result",
+			ToolUseID: tu.ID,
+			Content:   json.RawMessage(encoded),
+			IsError:   isError,
+		}
 
 		events <- Event{
 			Type: EventToolResult,
@@ -787,4 +788,6 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			},
 			Turn: turn,
 		}
+
+		return block
 	}

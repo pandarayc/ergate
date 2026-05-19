@@ -140,7 +140,8 @@ func (c *AnthropicClient) readSSEStream(ctx context.Context, body io.ReadCloser,
 	var currentEvent string
 	var currentData strings.Builder
 	var messageStopSeen bool
-	var inputJSON strings.Builder // accumulates tool_use input JSON across deltas
+	var inputJSON strings.Builder     // accumulates tool_use input JSON across deltas
+	var currentBlockType string        // tracks the type of the current content block
 
 	for scanner.Scan() {
 		select {
@@ -174,6 +175,7 @@ func (c *AnthropicClient) readSSEStream(ctx context.Context, body io.ReadCloser,
 			case "content_block_start":
 				var evt anthropicContentBlockStartEvent
 				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					currentBlockType = evt.ContentBlock.Type
 					if evt.ContentBlock.Type == "tool_use" {
 						inputJSON.Reset()
 						raw, _ := json.Marshal(map[string]interface{}{
@@ -201,11 +203,13 @@ func (c *AnthropicClient) readSSEStream(ctx context.Context, body io.ReadCloser,
 			case "content_block_stop":
 				var evt anthropicContentBlockStopEvent
 				if err := json.Unmarshal([]byte(data), &evt); err == nil {
-					raw, _ := json.Marshal(map[string]interface{}{
-						"index": evt.Index,
-						"input": json.RawMessage(inputJSON.String()),
-					})
-					events <- StreamEvent{Type: EventToolUseEnd, Data: raw}
+					if currentBlockType == "tool_use" {
+						raw, _ := json.Marshal(map[string]interface{}{
+							"index": evt.Index,
+							"input": json.RawMessage(inputJSON.String()),
+						})
+						events <- StreamEvent{Type: EventToolUseEnd, Data: raw}
+					}
 				}
 			case "message_delta":
 				messageStopSeen = true
