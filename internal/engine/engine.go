@@ -19,6 +19,7 @@ import (
 	"github.com/raydraw/ergate/internal/llm"
 	"github.com/raydraw/ergate/internal/planmode"
 	"github.com/raydraw/ergate/internal/memory"
+	"github.com/raydraw/ergate/internal/prompt"
 	"github.com/raydraw/ergate/internal/skill"
 	"github.com/raydraw/ergate/internal/task"
 	"github.com/raydraw/ergate/internal/tool"
@@ -372,44 +373,60 @@ func (e *Engine) buildRequest() *llm.ChatRequest {
 }
 
 func (e *Engine) buildSystemPrompt() string {
-	var sb strings.Builder
+	return prompt.Build(e.promptInput())
+}
 
-	sb.WriteString("You are a helpful AI assistant with access to software engineering tools. ")
-	sb.WriteString("You can read files, write files, execute shell commands, and search code. ")
-	sb.WriteString("When given a task, break it down into steps and use the available tools to complete it. ")
-	sb.WriteString("Be thorough and careful — verify your work before claiming success.\n\n")
+func (e *Engine) promptInput() prompt.Input {
+	in := prompt.Input{
+		CWD:         cwd(),
+		CurrentDate: time.Now().Format("2006-01-02"),
+		Shell:       defaultShell(),
+		IsGitRepo:   isGitRepo(),
+		InPlanMode:  e.planMgr != nil && e.planMgr.InPlanMode(),
+	}
 
-	tools := e.tools.List()
-	if len(tools) > 0 {
-		sb.WriteString("Available tools:\n")
-		for _, t := range tools {
-			if t.IsEnabled() {
-				fmt.Fprintf(&sb, "- %s: %s\n", t.Name(), t.Description())
+	for _, entry := range e.memEntries {
+		in.Memory = append(in.Memory, prompt.MemoryEntry{
+			Name:        entry.Name,
+			Description: entry.Description,
+			Content:     entry.Content,
+		})
+	}
+	if e.agentEntry != nil {
+		in.Agent = &prompt.MemoryEntry{
+			Name:    e.agentEntry.Name,
+			Content: e.agentEntry.Content,
+		}
+	}
+	if e.skillReg != nil {
+		for _, name := range e.skillReg.List() {
+			if s, ok := e.skillReg.Get(name); ok {
+				in.Skills = append(in.Skills, prompt.SkillInfo{
+					Name:        s.Name,
+					Description: s.Description,
+				})
 			}
 		}
 	}
 
-	prompt := sb.String()
+	return in
+}
 
-	// Inject project memory
-	prompt = memory.BuildPrompt(prompt, e.memEntries)
+func cwd() string {
+	d, _ := os.Getwd()
+	return d
+}
 
-	// Inject AGENTS.md / CLAUDE.md
-	prompt = memory.InjectAgentInstructions(prompt, e.agentEntry)
-
-	// Inject skill descriptions
-	if e.skillReg != nil && len(e.skillReg.List()) > 0 {
-		prompt += "\n\n## Available Skills\n\n"
-		prompt += e.skillReg.Descriptions()
-		prompt += "\nUse the Skill tool to load a skill for detailed instructions.\n"
+func defaultShell() string {
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
 	}
+	return "/bin/sh"
+}
 
-	// Plan mode system prompt
-	if e.planMgr != nil && e.planMgr.InPlanMode() {
-		prompt += planmode.PlanSystemPrompt()
-	}
-
-	return prompt
+func isGitRepo() bool {
+	_, err := os.Stat(".git")
+	return err == nil
 }
 
 func (e *Engine) addUserMessage(content string) {
