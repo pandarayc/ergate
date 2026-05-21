@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -1250,5 +1252,101 @@ func TestCoalescer_FlushMergesConsecutive(t *testing.T) {
 	}
 	if nm2.messages[0].Content != "abcdef" {
 		t.Errorf("expected 'abcdef', got %q", nm2.messages[0].Content)
+	}
+}
+
+// --- Viewport follow ---
+
+func TestViewportFollow_StaysAtBottom(t *testing.T) {
+	m := testModel()
+	// Fill viewport with enough lines to enable scrolling
+	m.messages = make([]ChatMessage, 50)
+	for i := range m.messages {
+		m.messages[i] = ChatMessage{Role: "assistant", Content: fmt.Sprintf("line %d", i)}
+	}
+	// Ensure viewport is at bottom
+	m.viewport.SetContent(strings.Repeat("x\n", 100))
+	m.viewport.GotoBottom()
+
+	// Verify we're at bottom
+	if !m.viewport.AtBottom() {
+		t.Fatal("viewport should be at bottom after GotoBottom")
+	}
+
+	// View() should keep us at bottom when new content is the same
+	_ = m.View()
+	if !m.viewport.AtBottom() {
+		t.Error("View() should keep viewport at bottom when it was already there")
+	}
+}
+
+func TestViewportFollow_KeepsScrollUp(t *testing.T) {
+	m := testModel()
+	// Fill with enough content to enable scrolling
+	m.viewport.SetContent(strings.Repeat("line content\n", 200))
+	m.viewport.GotoBottom()
+
+	// Scroll up a bit
+	m.viewport.ScrollUp(10)
+	atBottomBefore := m.viewport.AtBottom()
+	if atBottomBefore {
+		t.Fatal("viewport should not be at bottom after scrolling up")
+	}
+
+	// Add more messages and call View()
+	m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: "new message"})
+	_ = m.View()
+
+	// Should still not be at bottom because user scrolled up
+	if m.viewport.AtBottom() {
+		t.Error("View() should NOT auto-scroll to bottom when user scrolled up")
+	}
+}
+
+func TestViewportFollow_RespectsScrollUpDuringStreaming(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	// Pre-fill with enough content to scroll
+	m.viewport.SetContent(strings.Repeat("history line\n", 200))
+	m.viewport.GotoBottom()
+
+	// Simulate user scrolling up by directly setting offset
+	maxOff := m.viewport.TotalLineCount() - m.viewport.VisibleLineCount()
+	if maxOff <= 0 {
+		t.Skip("viewport too small for scroll test")
+	}
+	m.viewport.ScrollUp(10)
+	if m.viewport.AtBottom() {
+		t.Fatal("should not be at bottom after scrolling up")
+	}
+
+	// Add messages to trigger View() content change
+	m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: "new message"})
+
+	// View() should NOT pull user to bottom
+	_ = m.View()
+	if m.viewport.AtBottom() {
+		t.Error("View() should not auto-scroll when user scrolled up")
+	}
+}
+
+func TestViewportFollow_ScrollsToBottomWhenUserAtBottom(t *testing.T) {
+	m := testModel()
+	m.viewport.SetContent(strings.Repeat("old content\n", 200))
+	m.viewport.GotoBottom()
+
+	if !m.viewport.AtBottom() {
+		t.Fatal("viewport should be at bottom")
+	}
+
+	// Add new message
+	m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: "brand new line"})
+	_ = m.View()
+
+	// Should still be at bottom (following new content)
+	if !m.viewport.AtBottom() {
+		t.Error("View() should auto-scroll to bottom when user was at bottom")
 	}
 }

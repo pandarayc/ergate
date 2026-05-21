@@ -63,9 +63,12 @@ func (m Model) View() string {
 
 	b.WriteString("\n")
 
-	// Set viewport
+	// Set viewport — preserve scroll position when user scrolled up
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(b.String())
-	m.viewport.GotoBottom()
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
 
 	// Permission dialog
 	var bottom strings.Builder
