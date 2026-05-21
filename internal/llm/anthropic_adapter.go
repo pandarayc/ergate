@@ -22,7 +22,7 @@ func (AnthropicAdapter) BuildRequestBody(req *ChatRequest) map[string]interface{
 	}
 
 	if req.System != "" {
-		apiReq["system"] = req.System
+		apiReq["system"] = anthropicSystemPrompt(req.System)
 	}
 
 	// Extended thinking
@@ -56,6 +56,38 @@ func (AnthropicAdapter) BuildRequestBody(req *ChatRequest) map[string]interface{
 	}
 
 	return apiReq
+}
+
+const cacheBoundary = "<!-- CACHE_BOUNDARY: content above is stable and cacheable -->"
+
+// anthropicSystemPrompt returns either a plain string or, when the prompt
+// includes the cache boundary marker, a two-element array with the stable
+// prefix marked for caching.
+func anthropicSystemPrompt(prompt string) interface{} {
+	idx := strings.Index(prompt, cacheBoundary)
+	if idx < 0 {
+		return prompt
+	}
+
+	stable := strings.TrimRight(prompt[:idx], "\n ")
+	dynamic := prompt[idx+len(cacheBoundary):]
+
+	blocks := []map[string]interface{}{
+		{
+			"type": "text",
+			"text": stable,
+			"cache_control": map[string]interface{}{
+				"type": "ephemeral",
+			},
+		},
+	}
+	if dynamic = strings.TrimSpace(dynamic); dynamic != "" {
+		blocks = append(blocks, map[string]interface{}{
+			"type": "text",
+			"text": dynamic,
+		})
+	}
+	return blocks
 }
 
 func anthropicConvertContent(blocks []ContentBlock) interface{} {
