@@ -7,13 +7,9 @@ import (
 	"strings"
 )
 
-const toolSearchSchema = `{
-  "type": "object",
-  "properties": {
-    "query": {"type": "string", "description": "Keywords to search for in tool names and descriptions"}
-  },
-  "required": ["query"]
-}`
+var toolSearchSchema = Schema(map[string]any{
+	"query": map[string]any{"type": "string", "description": "Keywords to search for in tool names and descriptions"},
+}, []string{"query"})
 
 // ToolSearchTool lets the model discover tools by keyword.
 type ToolSearchTool struct {
@@ -27,7 +23,7 @@ func NewToolSearchTool(reg *Registry) *ToolSearchTool {
 		BaseTool: NewBaseTool(
 			"ToolSearch",
 			"Search available tools by keyword. Use to discover tools matching a task before loading them.",
-			json.RawMessage(toolSearchSchema),
+			toolSearchSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),

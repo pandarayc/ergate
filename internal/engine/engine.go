@@ -64,55 +64,46 @@ type Engine struct {
 	fileTracker *filehistory.Tracker
 	planMgr     *planmode.Manager
 	taskNotify  <-chan task.Notification
+	todoMgr     *tool.TodoManager
 	permCtx      tool.PermissionContext
 	transcriptDir string
 }
 
+// Context holds the optional subsystems available to the engine.
+type Context struct {
+	Skills        *skill.Registry
+	Hooks         *hooks.Manager
+	FileTracker   *filehistory.Tracker
+	PlanMgr       *planmode.Manager
+	PermCtx       tool.PermissionContext
+	TranscriptDir string
+	TaskNotify    <-chan task.Notification
+	TodoMgr       *tool.TodoManager
+	PermMgr       tool.PermissionManager
+	Memory        []memory.Entry
+	Agent         *memory.Entry
+}
+
 // New creates a new Engine.
-func New(cfg *config.Config, client llm.LLMClient, tools *tool.Registry) *Engine {
+func New(cfg *config.Config, client llm.LLMClient, tools *tool.Registry, ectx Context) *Engine {
 	return &Engine{
-		client:  client,
-		tools:   tools,
-		cfg:     cfg,
-		logger:  slog.Default(),
-		messages: make([]llm.Message, 0),
+		client:        client,
+		tools:         tools,
+		cfg:           cfg,
+		logger:        slog.Default(),
+		messages:      make([]llm.Message, 0),
+		skillReg:      ectx.Skills,
+		hookMgr:       ectx.Hooks,
+		fileTracker:   ectx.FileTracker,
+		planMgr:       ectx.PlanMgr,
+		permCtx:       ectx.PermCtx,
+		transcriptDir: ectx.TranscriptDir,
+		taskNotify:    ectx.TaskNotify,
+		todoMgr:       ectx.TodoMgr,
+		permissions:   ectx.PermMgr,
+		memEntries:    ectx.Memory,
+		agentEntry:    ectx.Agent,
 	}
-}
-
-// SetMemory sets project memory entries for the system prompt.
-func (e *Engine) SetMemory(entries []memory.Entry, agent *memory.Entry) {
-	e.memEntries = entries
-	e.agentEntry = agent
-}
-
-// SetSkills sets the skill registry for system prompt and tool registration.
-func (e *Engine) SetSkills(reg *skill.Registry) {
-	e.skillReg = reg
-}
-
-// SetHooks sets the hook manager for tool execution callbacks.
-func (e *Engine) SetHooks(mgr *hooks.Manager) {
-	e.hookMgr = mgr
-}
-
-// SetFileTracker sets the file history tracker.
-func (e *Engine) SetFileTracker(ft *filehistory.Tracker) {
-	e.fileTracker = ft
-}
-
-// SetPlanManager sets the plan mode state machine.
-func (e *Engine) SetPlanManager(mgr *planmode.Manager) {
-	e.planMgr = mgr
-}
-
-// SetPermissionContext sets the permission rules.
-func (e *Engine) SetPermissionContext(ctx tool.PermissionContext) {
-	e.permCtx = ctx
-}
-
-// SetTranscriptDir enables auto-saving transcripts after each interaction.
-func (e *Engine) SetTranscriptDir(dir string) {
-	e.transcriptDir = dir
 }
 
 // checkPermRules evaluates AlwaysDeny/AlwaysAllow/AlwaysAsk rules for a tool.
@@ -154,16 +145,6 @@ func matchPermPattern(toolName string, input json.RawMessage, rule tool.Permissi
 	}
 	// Simple substring match on input JSON
 	return strings.Contains(string(input), rule.Pattern)
-}
-
-// SetTaskNotify sets the task notification channel.
-func (e *Engine) SetTaskNotify(ch <-chan task.Notification) {
-	e.taskNotify = ch
-}
-
-// SetPermissionManager sets the permission manager for tool execution.
-func (e *Engine) SetPermissionManager(pm tool.PermissionManager) {
-	e.permissions = pm
 }
 
 // Messages returns a copy of the current conversation history.
@@ -347,11 +328,30 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 		// Execute tools with permission checks
 		e.executeTools(ctx, toolUseBlocks, events, turn)
 
+			// Todo nag reminder: bump counter and check after tool execution
+			if e.todoMgr != nil {
+				e.todoMgr.BumpRound()
+				if e.todoMgr.ShouldRemind() {
+					if !e.todoCalledThisTurn(toolUseBlocks) {
+						events <- Event{Type: EventThinking, Data: e.todoMgr.ReminderText(), Turn: turn}
+					}
+				}
+			}
+
 		events <- Event{Type: EventTurnEnd, Turn: turn}
 	}
 
 	events <- Event{Type: EventDone, Data: "max_turns_reached"}
 	return nil
+}
+
+func (e *Engine) todoCalledThisTurn(toolUses []llm.ToolUseBlock) bool {
+	for _, tu := range toolUses {
+		if tu.Name == "TodoWrite" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *Engine) buildRequest() *llm.ChatRequest {

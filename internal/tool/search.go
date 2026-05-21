@@ -11,26 +11,11 @@ import (
 	"time"
 )
 
-const searchSchema = `{
-  "type": "object",
-  "properties": {
-    "query": {
-      "type": "string",
-      "description": "The search query to use"
-    },
-    "allowed_domains": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Only include search results from these domains"
-    },
-    "blocked_domains": {
-      "type": "array",
-      "items": {"type": "string"},
-      "description": "Never include search results from these domains"
-    }
-  },
-  "required": ["query"]
-}`
+var searchSchema = Schema(map[string]any{
+	"query":           map[string]any{"type": "string", "description": "The search query to use"},
+	"allowed_domains": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Only include search results from these domains"},
+	"blocked_domains": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Never include search results from these domains"},
+}, []string{"query"})
 
 const searchDescription = `Search the web for information. Returns search result information including titles, snippets, and links. Use this tool for accessing information beyond your knowledge cutoff. Results include links as markdown hyperlinks.`
 
@@ -45,7 +30,7 @@ func NewWebSearchTool() *WebSearchTool {
 		BaseTool: NewBaseTool(
 			"WebSearch",
 			searchDescription,
-			json.RawMessage(searchSchema),
+			searchSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),

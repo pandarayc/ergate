@@ -122,29 +122,3 @@ func LoadAgentFile(root string) *Entry {
 }
 
 // BuildPrompt appends memory entries to a system prompt.
-func BuildPrompt(base string, entries []Entry) string {
-	if len(entries) == 0 {
-		return base
-	}
-	var sb strings.Builder
-	sb.WriteString(base)
-	sb.WriteString("\n\n## Project Memory\n\n")
-	for _, e := range entries {
-		title := e.Name
-		if e.Description != "" {
-			title += " — " + e.Description
-		}
-		sb.WriteString(fmt.Sprintf("### %s\n\n", title))
-		sb.WriteString(e.Content)
-		sb.WriteString("\n\n")
-	}
-	return sb.String()
-}
-
-// InjectAgentInstructions prepends AGENTS.md/CLAUDE.md to the system prompt.
-func InjectAgentInstructions(base string, entry *Entry) string {
-	if entry == nil {
-		return base
-	}
-	return base + "\n\n## Project Instructions (" + entry.Name + ")\n\n" + entry.Content
-}

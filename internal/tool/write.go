@@ -8,20 +8,10 @@ import (
 	"path/filepath"
 )
 
-const writeSchema = `{
-  "type": "object",
-  "properties": {
-    "file_path": {
-      "type": "string",
-      "description": "The absolute path to the file to write (must be absolute, not relative)"
-    },
-    "content": {
-      "type": "string",
-      "description": "The content to write to the file"
-    }
-  },
-  "required": ["file_path", "content"]
-}`
+var writeSchema = Schema(map[string]any{
+	"file_path": map[string]any{"type": "string", "description": "The absolute path to the file to write (must be absolute, not relative)"},
+	"content":   map[string]any{"type": "string", "description": "The content to write to the file"},
+}, []string{"file_path", "content"})
 
 const writeDescription = `Write a file to the local filesystem. Creates a new file or overwrites an existing one with the provided content. The file path must be absolute. Parent directories are created automatically.`
 
@@ -36,7 +26,7 @@ func NewWriteTool() *WriteTool {
 		BaseTool: NewBaseTool(
 			"Write",
 			writeDescription,
-			json.RawMessage(writeSchema),
+			writeSchema,
 		),
 	}
 }

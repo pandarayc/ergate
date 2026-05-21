@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/raydraw/ergate/internal/engine"
@@ -70,20 +69,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+			// Ensure previous engine goroutine has fully exited
+			select {
+			case <-m.engineDone:
+			default:
+				return m, nil
+			}
+
 			m.messages = append(m.messages, ChatMessage{Role: "user", Content: input})
 			m.inputHistory = append(m.inputHistory, input)
 			m.historyIdx = len(m.inputHistory)
 			m.running = true
 			m.input.Reset()
 
-			m.ctx, m.cancel = context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(context.Background())
+			m.ctx = ctx
+			m.cancel = cancel
 			ch := make(chan engine.Event, 128)
 			m.eventChan = ch
+			m.engineDone = make(chan struct{})
 			go func() {
-				defer m.cancel()
-				_ = m.eng.Run(m.ctx, input, ch)
+				defer cancel()
+				defer close(m.engineDone)
+				_ = m.eng.Run(ctx, input, ch)
 			}()
-			cmds = append(cmds, m.listenEvents(), nextSpinnerTick)
+			cmds = append(cmds, m.listenEvents(), nextSpinnerTick())
 
 		case tea.KeyCtrlP:
 			if !m.running && len(m.inputHistory) > 0 {
@@ -119,6 +129,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case engineEventMsg:
 		m.handleEngineEvent(msg.event)
+		if m.coalesceDirty && len(m.coalesceText) >= 2048 {
+			m.flushCoalesced()
+		}
 		if !m.running {
 			in, out := m.eng.TotalUsage()
 			m.totalInTokens = in
@@ -131,7 +144,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinnerTickMsg:
 		if m.running {
 			m.spinnerIdx = (m.spinnerIdx + 1) % len(spinnerFrames)
-			cmds = append(cmds, nextSpinnerTick)
+			cmds = append(cmds, nextSpinnerTick())
+		}
+		if m.coalesceDirty {
+			m.flushCoalesced()
 		}
 	}
 
@@ -211,15 +227,11 @@ func (m *Model) handleCommand(input string) {
 
 func (m *Model) listenEvents() tea.Cmd {
 	return func() tea.Msg {
-		select {
-		case event, ok := <-m.eventChan:
-			if !ok {
-				return engineEventMsg{event: engine.Event{Type: engine.EventDone}}
-			}
-			return engineEventMsg{event: event}
-		case <-time.After(100 * time.Millisecond):
-			return engineEventMsg{event: engine.Event{Type: ""}}
+		event, ok := <-m.eventChan
+		if !ok {
+			return engineEventMsg{event: engine.Event{Type: engine.EventDone}}
 		}
+		return engineEventMsg{event: event}
 	}
 }
 
@@ -227,26 +239,27 @@ func (m *Model) handleEngineEvent(event engine.Event) {
 	switch event.Type {
 	case engine.EventText:
 		if text, ok := event.Data.(string); ok {
-			n := len(m.messages)
-			if n > 0 && m.messages[n-1].Role == "assistant" {
-				m.messages[n-1].Content += text
-			} else {
-				m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: text})
+			if m.coalesceDirty && m.coalesceRole != "assistant" {
+				m.flushCoalesced()
 			}
+			m.coalesceText += text
+			m.coalesceRole = "assistant"
+			m.coalesceDirty = true
 		}
 		m.currentTurn = event.Turn
 
 	case engine.EventThinking:
 		if text, ok := event.Data.(string); ok {
-			n := len(m.messages)
-			if n > 0 && m.messages[n-1].Role == "thinking" {
-				m.messages[n-1].Content += text
-			} else {
-				m.messages = append(m.messages, ChatMessage{Role: "thinking", Content: text})
+			if m.coalesceDirty && m.coalesceRole != "thinking" {
+				m.flushCoalesced()
 			}
+			m.coalesceText += text
+			m.coalesceRole = "thinking"
+			m.coalesceDirty = true
 		}
 
 	case engine.EventToolUse:
+		m.flushCoalesced()
 		if data, ok := event.Data.(map[string]any); ok {
 			name, _ := data["name"].(string)
 			m.currentToolName = name
@@ -255,6 +268,7 @@ func (m *Model) handleEngineEvent(event engine.Event) {
 		}
 
 	case engine.EventToolResult:
+		m.flushCoalesced()
 		m.currentToolName = ""
 		if data, ok := event.Data.(map[string]any); ok {
 			content, _ := data["content"].(string)
@@ -271,6 +285,7 @@ func (m *Model) handleEngineEvent(event engine.Event) {
 		}
 
 	case engine.EventError:
+		m.flushCoalesced()
 		var s string
 		if err, ok := event.Data.(error); ok {
 			s = err.Error()
@@ -281,14 +296,17 @@ func (m *Model) handleEngineEvent(event engine.Event) {
 		m.running = false
 
 	case engine.EventAborted:
+		m.flushCoalesced()
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "[Cancelled]"})
 		m.running = false
 
 	case engine.EventDone:
+		m.flushCoalesced()
 		m.running = false
 		m.currentToolName = ""
 
 	case engine.EventTurnEnd:
+		m.flushCoalesced()
 		m.currentTurn = event.Turn
 	}
 }

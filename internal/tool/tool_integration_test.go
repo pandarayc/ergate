@@ -13,7 +13,7 @@ func setupTools(t *testing.T) (*Registry, *ExecContext, string) {
 	dir := t.TempDir()
 
 	reg := NewRegistry()
-	RegisterBuiltins(reg)
+	RegisterBuiltins(reg, NewTodoManager())
 
 	execCtx := &ExecContext{CWD: dir}
 

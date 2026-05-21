@@ -11,7 +11,6 @@ import (
 
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/engine"
-	"github.com/raydraw/ergate/internal/tool"
 )
 
 // LoadConfig loads configuration using the config package.
@@ -42,18 +41,15 @@ func StartREPL(cfg *config.Config) error {
 	}
 
 	// Create LLM client, tools, and skills
-	client, toolRegistry, skillReg, err := SetupEngine(cfg)
+	client, toolRegistry, skillReg, todoMgr, err := SetupEngine(cfg)
 	if err != nil {
 		return fmt.Errorf("setup engine: %w", err)
 	}
 	defer client.Close()
 
-	// Create permission manager (headless: auto-allow read-only, deny destructive without TUI)
-	permMgr := tool.NewPermissionManager(string(cfg.PermissionMode), nil)
 
 	// Create engine with memory and skills
-	eng := CreateEngine(cfg, client, toolRegistry, skillReg)
-	eng.SetPermissionManager(permMgr)
+	eng := CreateEngine(cfg, client, toolRegistry, skillReg, todoMgr)
 
 	// Create command registry
 	cmdReg := NewCommandRegistry(cfg, eng)

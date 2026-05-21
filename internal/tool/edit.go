@@ -8,28 +8,12 @@ import (
 	"strings"
 )
 
-const editSchema = `{
-  "type": "object",
-  "properties": {
-    "file_path": {
-      "type": "string",
-      "description": "The absolute path to the file to modify"
-    },
-    "old_string": {
-      "type": "string",
-      "description": "The text to replace"
-    },
-    "new_string": {
-      "type": "string",
-      "description": "The text to replace it with (must be different from old_string)"
-    },
-    "replace_all": {
-      "type": "boolean",
-      "description": "Replace all occurrences of old_string (default false)"
-    }
-  },
-  "required": ["file_path", "old_string", "new_string"]
-}`
+var editSchema = Schema(map[string]any{
+	"file_path":   map[string]any{"type": "string", "description": "The absolute path to the file to modify"},
+	"old_string":  map[string]any{"type": "string", "description": "The text to replace"},
+	"new_string":  map[string]any{"type": "string", "description": "The text to replace it with (must be different from old_string)"},
+	"replace_all": map[string]any{"type": "boolean", "description": "Replace all occurrences of old_string (default false)"},
+}, []string{"file_path", "old_string", "new_string"})
 
 const editDescription = `Performs exact string replacements in files. When editing text, ensure you preserve the exact indentation (tabs/spaces) as it appears before. The edit will fail if old_string is not unique in the file. Use replace_all to replace every instance of old_string.`
 
@@ -44,7 +28,7 @@ func NewEditTool() *EditTool {
 		BaseTool: NewBaseTool(
 			"Edit",
 			editDescription,
-			json.RawMessage(editSchema),
+			editSchema,
 		),
 	}
 }

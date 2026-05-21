@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,6 +19,7 @@ type ChatMessage struct {
 	Role    string
 	Content string
 	Detail  string
+	rendered string // cached rendered output; cleared when Content changes
 }
 
 // Model is the top-level bubbletea model.
@@ -58,9 +60,15 @@ type Model struct {
 	didRestore   bool
 
 	// Engine event channel
-	eventChan chan engine.Event
-	ctx       context.Context
-	cancel    context.CancelFunc
+	eventChan  chan engine.Event
+	engineDone chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
+
+	// Streaming delta coalescer
+	coalesceText  string
+	coalesceRole  string
+	coalesceDirty bool
 }
 
 // engineEventMsg wraps an engine event as a tea.Msg.
@@ -75,9 +83,10 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 const spinnerTickInterval = 80 * time.Millisecond
 
-func nextSpinnerTick() tea.Msg {
-	time.Sleep(spinnerTickInterval)
-	return spinnerTickMsg{}
+func nextSpinnerTick() tea.Cmd {
+	return tea.Tick(spinnerTickInterval, func(t time.Time) tea.Msg {
+		return spinnerTickMsg{}
+	})
 }
 
 // NewModel creates a new TUI model.
@@ -89,6 +98,9 @@ func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resu
 
 	vp := viewport.New(80, 20)
 
+	engineDone := make(chan struct{})
+	close(engineDone) // start as done (no engine running)
+
 	m := Model{
 		cfg:          cfg,
 		eng:          eng,
@@ -96,6 +108,7 @@ func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resu
 		viewport:     vp,
 		messages:     make([]ChatMessage, 0),
 		sessionStore: store,
+		engineDone:   engineDone,
 	}
 
 	// Auto-restore latest session only when -r/--resume flag is set
@@ -120,10 +133,29 @@ func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resu
 	return m
 }
 
+// flushCoalesced writes buffered streaming deltas to messages.
+// Should be called before critical events and periodically from spinner tick.
+func (m *Model) flushCoalesced() {
+	if !m.coalesceDirty {
+		return
+	}
+	text := m.coalesceText
+	m.coalesceText = ""
+	m.coalesceDirty = false
+
+	n := len(m.messages)
+	if n > 0 && m.messages[n-1].Role == m.coalesceRole {
+		m.messages[n-1].Content += text
+		m.messages[n-1].rendered = ""
+	} else {
+		m.messages = append(m.messages, ChatMessage{Role: m.coalesceRole, Content: text})
+	}
+}
+
 // Init initializes the model.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
-		func() tea.Msg { return spinnerTickMsg{} },
+		nextSpinnerTick(),
 		textinput.Blink,
 	)
 }
@@ -146,24 +178,29 @@ func (m *Model) saveSession() {
 }
 
 func estimateCost(model string, inTokens, outTokens int) float64 {
-	// Approximate costs per 1M tokens (USD)
 	rates := map[string]struct{ in, out float64 }{
 		// Anthropic
 		"claude-sonnet-4-20250514": {3.0, 15.0},
 		"claude-opus-4-20250514":   {15.0, 75.0},
 		"claude-haiku-3-5":         {0.8, 4.0},
 		// OpenAI
-		"gpt-4o":     {2.5, 10.0},
+		"gpt-4o":      {2.5, 10.0},
 		"gpt-4o-mini": {0.15, 0.6},
 		// DeepSeek
 		"deepseek-chat":     {0.27, 1.10},
 		"deepseek-reasoner": {0.55, 2.19},
 	}
-	for prefix, rate := range rates {
+	// Longest match first to prevent "gpt-4o" from matching "gpt-4o-mini".
+	prefixes := make([]string, 0, len(rates))
+	for prefix := range rates {
+		prefixes = append(prefixes, prefix)
+	}
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+	for _, prefix := range prefixes {
 		if len(model) >= len(prefix) && model[:len(prefix)] == prefix {
+			rate := rates[prefix]
 			return float64(inTokens)/1e6*rate.in + float64(outTokens)/1e6*rate.out
 		}
 	}
-	// Default: assume ~$3/$15 per 1M tokens
 	return float64(inTokens)/1e6*3.0 + float64(outTokens)/1e6*15.0
 }

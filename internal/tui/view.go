@@ -36,7 +36,8 @@ func (m Model) View() string {
 	} else {
 		// Messages with separation
 		var prevRole string
-		for _, msg := range m.messages {
+		for i := range m.messages {
+			msg := &m.messages[i]
 			// Add blank line between user messages and previous content
 			if msg.Role == "user" && prevRole != "" && prevRole != "user" {
 				b.WriteString("\n")
@@ -98,32 +99,37 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), bottom.String())
 }
 
-func renderMessage(msg ChatMessage) string {
+func renderMessage(msg *ChatMessage) string {
+	if msg.rendered != "" {
+		return msg.rendered
+	}
+	var result string
 	switch msg.Role {
 	case "user":
-		return UserMsgStyle.Render("▸ ") + AssistantTextStyle.Render(msg.Content)
+		result = UserMsgStyle.Render("▸ ") + AssistantTextStyle.Render(msg.Content)
 	case "assistant":
 		rendered := util.RenderMarkdown(msg.Content, 0)
 		if rendered != "" {
-			return AssistantBorderStyle.Render("│") + " " + AssistantTextStyle.Render(rendered)
+			result = AssistantBorderStyle.Render("│") + " " + AssistantTextStyle.Render(rendered)
 		}
-		return ""
 	case "tool":
 		s := AssistantToolStyle.Render(msg.Content)
 		if msg.Detail != "" {
 			display := renderToolDetail(msg.Content, msg.Detail)
 			s += "\n" + ToolResultStyle.Render(display)
 		}
-		return s
+		result = s
 	case "thinking":
-		return ThinkingStyle.Render("[thinking] " + truncateStr(msg.Content, 80))
+		result = ThinkingStyle.Render("[thinking] " + truncateStr(msg.Content, 80))
 	case "error":
-		return ErrorStyle.Render("✖ " + msg.Content)
+		result = ErrorStyle.Render("✖ " + msg.Content)
 	case "system":
-		return HelpStyle.Render("· " + msg.Content)
+		result = HelpStyle.Render("· " + msg.Content)
 	default:
-		return msg.Content
+		result = msg.Content
 	}
+	msg.rendered = result
+	return result
 }
 
 // renderToolDetail renders tool detail with diff-style coloring.

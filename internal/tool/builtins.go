@@ -1,7 +1,7 @@
 package tool
 
 // RegisterBuiltins registers all built-in tools with the registry.
-func RegisterBuiltins(reg *Registry) {
+func RegisterBuiltins(reg *Registry, todo *TodoManager) {
 	reg.Register(NewBashTool())
 	reg.Register(NewReadTool())
 	reg.Register(NewWriteTool())
@@ -11,4 +11,5 @@ func RegisterBuiltins(reg *Registry) {
 	reg.Register(NewWebFetchTool())
 	reg.Register(NewWebSearchTool())
 	reg.Register(NewToolSearchTool(reg))
+	reg.Register(NewTodoWriteTool(todo))
 }

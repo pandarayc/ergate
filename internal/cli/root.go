@@ -75,25 +75,25 @@ func runHeadless(cfg *appconfig.Config) error {
 
 // runTUI starts the bubbletea TUI.
 func runTUI(cfg *appconfig.Config) error {
-	client, registry, skillReg, err := SetupEngine(cfg)
+	client, registry, skillReg, todoMgr, err := SetupEngine(cfg)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	eng := CreateEngine(cfg, client, registry, skillReg)
+	eng := CreateEngine(cfg, client, registry, skillReg, todoMgr)
 	return StartTUI(cfg, eng, resume)
 }
 
 // runOneShot executes a single prompt and prints the result.
 func runOneShot(cfg *appconfig.Config, prompt string) error {
-	client, registry, skillReg, err := SetupEngine(cfg)
+	client, registry, skillReg, todoMgr, err := SetupEngine(cfg)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	eng := CreateEngine(cfg, client, registry, skillReg)
+	eng := CreateEngine(cfg, client, registry, skillReg, todoMgr)
 	return RunOneShot(eng, prompt)
 }
 

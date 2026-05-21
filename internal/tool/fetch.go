@@ -10,20 +10,10 @@ import (
 	"time"
 )
 
-const fetchSchema = `{
-  "type": "object",
-  "properties": {
-    "url": {
-      "type": "string",
-      "description": "The URL to fetch content from"
-    },
-    "prompt": {
-      "type": "string",
-      "description": "What information you want to extract from the page"
-    }
-  },
-  "required": ["url", "prompt"]
-}`
+var fetchSchema = Schema(map[string]any{
+	"url":    map[string]any{"type": "string", "description": "The URL to fetch content from"},
+	"prompt": map[string]any{"type": "string", "description": "What information you want to extract from the page"},
+}, []string{"url", "prompt"})
 
 const fetchDescription = `Fetches content from a specified URL and processes it. Use this tool when you need to retrieve and analyze web content. The URL must be a fully-formed valid URL. HTTP URLs will be automatically upgraded to HTTPS.`
 
@@ -38,7 +28,7 @@ func NewWebFetchTool() *WebFetchTool {
 		BaseTool: NewBaseTool(
 			"WebFetch",
 			fetchDescription,
-			json.RawMessage(fetchSchema),
+			fetchSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),

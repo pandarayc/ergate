@@ -10,20 +10,10 @@ import (
 	"strings"
 )
 
-const globSchema = `{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "The glob pattern to match files against"
-    },
-    "path": {
-      "type": "string",
-      "description": "The directory to search in (defaults to current working directory)"
-    }
-  },
-  "required": ["pattern"]
-}`
+var globSchema = Schema(map[string]any{
+	"pattern": map[string]any{"type": "string", "description": "The glob pattern to match files against"},
+	"path":    map[string]any{"type": "string", "description": "The directory to search in (defaults to current working directory)"},
+}, []string{"pattern"})
 
 const globDescription = `Find files matching a glob pattern. Returns a list of matching file paths. Supports standard glob syntax: * matches any characters, ** matches any directories recursively, ? matches a single character. Results are sorted and limited to 100 files.`
 
@@ -38,7 +28,7 @@ func NewGlobTool() *GlobTool {
 		BaseTool: NewBaseTool(
 			"Glob",
 			globDescription,
-			json.RawMessage(globSchema),
+			globSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),

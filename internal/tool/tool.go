@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
 )
 
 // Tool is the interface every tool must implement.
@@ -211,4 +212,17 @@ func (t *builtTool) CheckPermissions(ctx context.Context, input json.RawMessage,
 		return t.def.CheckPermissions(ctx, input, permCtx)
 	}
 	return PermissionResult{Behavior: BehaviorAllow, UpdatedInput: input}
+}
+
+// Schema builds a JSON Schema from properties and required fields.
+// json.Marshal produces sorted keys for deterministic output.
+func Schema(props map[string]any, required []string) json.RawMessage {
+	sort.Strings(required)
+	schema := map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   required,
+	}
+	b, _ := json.Marshal(schema)
+	return json.RawMessage(b)
 }

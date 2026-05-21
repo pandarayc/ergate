@@ -22,19 +22,20 @@ import (
 )
 
 // SetupEngine creates the LLM client and tool registry.
-func SetupEngine(cfg *config.Config) (llm.LLMClient, *tool.Registry, *skill.Registry, error) {
+func SetupEngine(cfg *config.Config) (llm.LLMClient, *tool.Registry, *skill.Registry, *tool.TodoManager, error) {
 	if err := cfg.EnsureDirs(); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	pc := cfg.ActiveProviderConfig()
 	client, err := llm.NewLLMClient(cfg.CompatProvider(), pc.APIKey, pc.BaseURL)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
+	todoMgr := tool.NewTodoManager()
 	toolReg := tool.NewRegistry()
-	tool.RegisterBuiltins(toolReg)
+	tool.RegisterBuiltins(toolReg, todoMgr)
 
 	// Load skills
 	skillReg := skill.NewRegistry()
@@ -46,62 +47,14 @@ func SetupEngine(cfg *config.Config) (llm.LLMClient, *tool.Registry, *skill.Regi
 		connectMCPServers(cwd, toolReg)
 	}
 
-	return client, toolReg, skillReg, nil
+	return client, toolReg, skillReg, todoMgr, nil
 }
 
 // CreateEngine creates the engine with permissions wired.
-func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Registry, skillReg *skill.Registry) *engine.Engine {
-	eng := engine.New(cfg, client, registry)
-
-	permMgr := tool.NewPermissionManager(string(cfg.PermissionMode), nil)
-	eng.SetPermissionManager(permMgr)
-
-	// Register skill tool so the model can load skills
-	registry.Register(skill.NewLoadSkillTool(skillReg))
-
-	// Plan mode
-	planMgr := planmode.NewManager()
-	registry.Register(planmode.NewEnterPlanTool(planMgr))
-	registry.Register(planmode.NewExitPlanTool(planMgr))
-	eng.SetPlanManager(planMgr)
-
-	// Worktree support
-	worktreeMgr := worktree.NewManager()
-	registry.Register(worktree.NewEnterWorktreeTool(worktreeMgr))
-	registry.Register(worktree.NewExitWorktreeTool(worktreeMgr))
-
-	// Create task registry and register task tools
-	taskReg := task.NewRegistry()
-	registry.Register(task.NewCreateTool(taskReg))
-	registry.Register(task.NewOutputTool(taskReg))
-	registry.Register(task.NewStopTool(taskReg))
-	registry.Register(task.NewListTool(taskReg))
-	registry.Register(task.NewAgentTool(taskReg, client, cfg.SubagentModelName(), registry))
-	eng.SetTaskNotify(taskReg.NotifyChan())
-
+func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Registry, skillReg *skill.Registry, todoMgr *tool.TodoManager) *engine.Engine {
 	cwd, _ := os.Getwd()
-	// Set file history tracker
-	ft := filehistory.NewTracker(cwd)
-	eng.SetFileTracker(ft)
 
-	// Set skills on engine for system prompt
-	eng.SetSkills(skillReg)
-
-	// Register memory write tool so the model can save memories
-	memDir := memory.Dir(cwd)
-	registry.Register(memory.NewWriteTool(memDir, func(path string) {
-		memory.UpdateMEMORYMD(memDir, filepath.Base(path))
-	}))
-
-	// Enable auto-save transcript
-	transcriptDir := filepath.Join(cwd, ".ergate", "sessions")
-	eng.SetTranscriptDir(transcriptDir)
-
-	// Wire hooks manager
-	hookMgr := hooks.NewManager()
-	eng.SetHooks(hookMgr)
-
-	// Wire permission context
+	// Build engine context
 	permMode := tool.PermModeDefault
 	switch cfg.PermissionMode {
 	case "always":
@@ -109,18 +62,47 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 	case "bypass":
 		permMode = tool.PermModeBypassPermissions
 	}
-	eng.SetPermissionContext(tool.PermissionContext{
-		Mode:             permMode,
-		AlwaysAllowRules: make(map[string][]tool.PermissionRule),
-		AlwaysDenyRules:  make(map[string][]tool.PermissionRule),
-		AlwaysAskRules:   make(map[string][]tool.PermissionRule),
-	})
 
-	// Load project memory
-	if entries, err := memory.LoadAll(memDir); err == nil {
-		agent := memory.LoadAgentFile(cwd)
-		eng.SetMemory(entries, agent)
+	taskReg := task.NewRegistry()
+	memDir := memory.Dir(cwd)
+	ectx := engine.Context{
+		Skills:        skillReg,
+		Hooks:         hooks.NewManager(),
+		FileTracker:   filehistory.NewTracker(cwd),
+		PlanMgr:       planmode.NewManager(),
+		TodoMgr:       todoMgr,
+		TaskNotify:    taskReg.NotifyChan(),
+		TranscriptDir: filepath.Join(cwd, ".ergate", "sessions"),
+		PermMgr:       tool.NewPermissionManager(string(cfg.PermissionMode), nil),
+		PermCtx: tool.PermissionContext{
+			Mode:             permMode,
+			AlwaysAllowRules: make(map[string][]tool.PermissionRule),
+			AlwaysDenyRules:  make(map[string][]tool.PermissionRule),
+			AlwaysAskRules:   make(map[string][]tool.PermissionRule),
+		},
 	}
+	if entries, err := memory.LoadAll(memDir); err == nil {
+		ectx.Memory = entries
+		ectx.Agent = memory.LoadAgentFile(cwd)
+	}
+
+	eng := engine.New(cfg, client, registry, ectx)
+
+	// Register tools
+	registry.Register(skill.NewLoadSkillTool(skillReg))
+	registry.Register(planmode.NewEnterPlanTool(ectx.PlanMgr))
+	registry.Register(planmode.NewExitPlanTool(ectx.PlanMgr))
+	worktreeMgr := worktree.NewManager()
+	registry.Register(worktree.NewEnterWorktreeTool(worktreeMgr))
+	registry.Register(worktree.NewExitWorktreeTool(worktreeMgr))
+	registry.Register(task.NewCreateTool(taskReg))
+	registry.Register(task.NewOutputTool(taskReg))
+	registry.Register(task.NewStopTool(taskReg))
+	registry.Register(task.NewListTool(taskReg))
+	registry.Register(task.NewAgentTool(taskReg, client, cfg.SubagentModelName(), registry))
+	registry.Register(memory.NewWriteTool(memDir, func(path string) {
+		memory.UpdateMEMORYMD(memDir, filepath.Base(path))
+	}))
 
 	return eng
 }

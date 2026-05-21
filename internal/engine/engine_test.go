@@ -123,7 +123,7 @@ func TestEngineTextOnlyResponse(t *testing.T) {
 	}
 
 	reg := tool.NewRegistry()
-	eng := New(cfg, mock, reg)
+	eng := New(cfg, mock, reg, Context{})
 
 	events := make(chan Event, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,7 +174,7 @@ func TestEngineToolUseResponse(t *testing.T) {
 	reg := tool.NewRegistry()
 	reg.Register(newEchoTool())
 
-	eng := New(cfg, mock, reg)
+	eng := New(cfg, mock, reg, Context{})
 
 	events := make(chan Event, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -225,7 +225,7 @@ func TestEngineMessagesPersistence(t *testing.T) {
 	}
 
 	reg := tool.NewRegistry()
-	eng := New(cfg, mock, reg)
+	eng := New(cfg, mock, reg, Context{})
 
 	events := make(chan Event, 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

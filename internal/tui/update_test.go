@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/raydraw/ergate/internal/config"
@@ -29,22 +30,8 @@ func (noopLLMClient) Adapter() llm.ProviderAdapter   { return nil }
 
 func testModel() Model {
 	cfg := config.DefaultConfig()
-	eng := engine.New(cfg, noopLLMClient{}, tool.NewRegistry())
+	eng := engine.New(cfg, noopLLMClient{}, tool.NewRegistry(), engine.Context{})
 	return NewModel(cfg, eng, nil, false)
-}
-
-func assertCmd(t *testing.T, cmd tea.Cmd, wantNonNil bool) tea.Msg {
-	t.Helper()
-	if wantNonNil && cmd == nil {
-		t.Fatal("expected non-nil cmd, got nil")
-	}
-	if !wantNonNil && cmd != nil {
-		t.Fatal("expected nil cmd, got non-nil")
-	}
-	if cmd == nil {
-		return nil
-	}
-	return cmd()
 }
 
 // --- KeyEnter ---
@@ -160,6 +147,7 @@ func TestUpdate_EngineEvent_Text_NewMessage(t *testing.T) {
 
 	newM, cmd := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "Hello"}})
 	nm := newM.(Model)
+	nm.flushCoalesced()
 
 	if len(nm.messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(nm.messages))
@@ -181,6 +169,7 @@ func TestUpdate_EngineEvent_Text_ExtendsExisting(t *testing.T) {
 
 	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "lo"}})
 	nm := newM.(Model)
+	nm.flushCoalesced()
 
 	if len(nm.messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(nm.messages))
@@ -198,6 +187,7 @@ func TestUpdate_EngineEvent_Text_NewAfterTool(t *testing.T) {
 
 	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "After tool"}})
 	nm := newM.(Model)
+	nm.flushCoalesced()
 
 	if len(nm.messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(nm.messages))
@@ -214,6 +204,7 @@ func TestUpdate_EngineEvent_Thinking_NewMessage(t *testing.T) {
 
 	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventThinking, Data: "Hmm..."}})
 	nm := newM.(Model)
+	nm.flushCoalesced()
 
 	if len(nm.messages) != 1 || nm.messages[0].Role != "thinking" || nm.messages[0].Content != "Hmm..." {
 		t.Error("should create thinking message")
@@ -228,6 +219,7 @@ func TestUpdate_EngineEvent_Thinking_ExtendsExisting(t *testing.T) {
 
 	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventThinking, Data: "..."}})
 	nm := newM.(Model)
+	nm.flushCoalesced()
 
 	if nm.messages[0].Content != "Hmm..." {
 		t.Errorf("expected 'Hmm...', got %q", nm.messages[0].Content)
@@ -416,19 +408,6 @@ func TestUpdate_EngineEvent_TurnEnd(t *testing.T) {
 
 	if nm.currentTurn != 3 {
 		t.Errorf("expected currentTurn 3, got %d", nm.currentTurn)
-	}
-}
-
-func TestUpdate_EngineEvent_EmptyType_Requeues(t *testing.T) {
-	m := testModel()
-	m.running = true
-	m.eventChan = make(chan engine.Event, 1)
-
-	_, cmd := m.Update(engineEventMsg{event: engine.Event{Type: ""}})
-
-	// Empty type (timeout) should re-queue listenEvents
-	if cmd == nil {
-		t.Error("empty event type should re-queue listenEvents")
 	}
 }
 
@@ -841,9 +820,14 @@ func TestListenEvents_ReceivesEvent(t *testing.T) {
 	}
 }
 
-func TestListenEvents_TimesOut(t *testing.T) {
+func TestListenEvents_BlocksUntilEvent(t *testing.T) {
 	m := testModel()
 	m.eventChan = make(chan engine.Event, 1)
+
+	// Send event in background to unblock the blocking read
+	go func() {
+		m.eventChan <- engine.Event{Type: engine.EventText, Data: "async"}
+	}()
 
 	cmd := m.listenEvents()
 	msg := cmd()
@@ -852,8 +836,8 @@ func TestListenEvents_TimesOut(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected engineEventMsg, got %T", msg)
 	}
-	if evt.event.Type != "" {
-		t.Errorf("timeout should return empty type, got %q", evt.event.Type)
+	if evt.event.Type != engine.EventText {
+		t.Errorf("expected EventText, got %q", evt.event.Type)
 	}
 }
 
@@ -973,5 +957,298 @@ func TestEngineEventJSON(t *testing.T) {
 	}
 	if decoded.Type != engine.EventText {
 		t.Error("round-trip type mismatch")
+	}
+}
+
+// --- Render caching ---
+
+func TestRenderMessage_CachesOutput(t *testing.T) {
+	msg := &ChatMessage{Role: "assistant", Content: "hello **world**"}
+	r1 := renderMessage(msg)
+	if r1 == "" {
+		t.Fatal("renderMessage returned empty string")
+	}
+	if msg.rendered == "" {
+		t.Error("rendered cache should be set after first render")
+	}
+	r2 := renderMessage(msg)
+	if r1 != r2 {
+		t.Error("second render should return cached result")
+	}
+}
+
+func TestRenderMessage_CacheBustOnContentChange(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.messages = []ChatMessage{{Role: "assistant", Content: "Hello"}}
+	renderMessage(&m.messages[0])
+	if m.messages[0].rendered == "" {
+		t.Fatal("expected cached render")
+	}
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: " world"}})
+	nm := newM.(Model)
+	nm.flushCoalesced()
+	if nm.messages[0].rendered != "" {
+		t.Error("rendered cache should be cleared after content append")
+	}
+}
+
+func TestRenderMessage_CacheBustOnThinkingChange(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.messages = []ChatMessage{{Role: "thinking", Content: "Hmm"}}
+	renderMessage(&m.messages[0])
+	if m.messages[0].rendered == "" {
+		t.Fatal("expected cached render")
+	}
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventThinking, Data: "..."}})
+	nm := newM.(Model)
+	nm.flushCoalesced()
+	if nm.messages[0].rendered != "" {
+		t.Error("rendered cache should be cleared after thinking append")
+	}
+}
+
+func TestView_UsesRenderCache(t *testing.T) {
+	m := testModel()
+	m.messages = []ChatMessage{
+		{Role: "user", Content: "hi"},
+		{Role: "assistant", Content: "Hello **bold** world"},
+	}
+	_ = m.View()
+	for i := range m.messages {
+		if m.messages[i].rendered == "" {
+			t.Errorf("message %d (%s) should have rendered cache after View()", i, m.messages[i].Role)
+		}
+	}
+}
+
+// --- engineDone gate ---
+
+func TestKeyEnter_BlockedByUnfinishedEngine(t *testing.T) {
+	m := testModel()
+	m.running = false
+	m.input.SetValue("hello")
+	m.engineDone = make(chan struct{}) // open = engine still running
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Error("Enter should be blocked when engineDone is not closed")
+	}
+}
+
+func TestKeyEnter_EngineDoneRecreated(t *testing.T) {
+	oldDone := make(chan struct{})
+	close(oldDone)
+
+	m := testModel()
+	m.running = false
+	m.input.SetValue("hello")
+	m.engineDone = oldDone
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm := newM.(Model)
+
+	if nm.engineDone == nil {
+		t.Fatal("engineDone should be re-created for new engine run")
+	}
+	if nm.engineDone == oldDone {
+		t.Error("engineDone should be a new channel, not the old one")
+	}
+}
+
+// --- listenEvents blocks ---
+
+func TestListenEvents_BlocksOnEmptyChannel(t *testing.T) {
+	m := testModel()
+	m.eventChan = make(chan engine.Event, 1)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		cmd := m.listenEvents()
+		cmd()
+		done <- struct{}{}
+	}()
+
+	select {
+	case <-done:
+		t.Error("listenEvents should block on empty channel")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	m.eventChan <- engine.Event{Type: engine.EventDone}
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Error("listenEvents did not unblock after sending event")
+	}
+}
+
+// --- Coalescer ---
+
+func TestCoalescer_BuffersTextDelta(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "Hello"}})
+	nm := newM.(Model)
+
+	if !nm.coalesceDirty {
+		t.Error("coalesceDirty should be true after text delta")
+	}
+	if nm.coalesceText != "Hello" {
+		t.Errorf("expected 'Hello' in buffer, got %q", nm.coalesceText)
+	}
+	if nm.coalesceRole != "assistant" {
+		t.Errorf("expected role 'assistant', got %q", nm.coalesceRole)
+	}
+	if len(nm.messages) > 0 {
+		t.Error("messages should be empty before flush")
+	}
+}
+
+func TestCoalescer_FlushWritesToMessages(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "Hello world"}})
+	nm := newM.(Model)
+	nm.flushCoalesced()
+
+	if nm.coalesceDirty {
+		t.Error("coalesceDirty should be false after flush")
+	}
+	if len(nm.coalesceText) != 0 {
+		t.Error("buffer should be empty after flush")
+	}
+	if len(nm.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(nm.messages))
+	}
+	if nm.messages[0].Content != "Hello world" {
+		t.Errorf("expected 'Hello world', got %q", nm.messages[0].Content)
+	}
+}
+
+func TestCoalescer_FlushExtendsExistingMessage(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+	m.messages = []ChatMessage{{Role: "assistant", Content: "Hel"}}
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "lo"}})
+	nm := newM.(Model)
+	nm.flushCoalesced()
+
+	if len(nm.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(nm.messages))
+	}
+	if nm.messages[0].Content != "Hello" {
+		t.Errorf("expected 'Hello', got %q", nm.messages[0].Content)
+	}
+	if nm.messages[0].rendered != "" {
+		t.Error("rendered cache should be cleared after flush")
+	}
+}
+
+func TestCoalescer_RoleSwitchFlushes(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventThinking, Data: "Hmm..."}})
+	nm := newM.(Model)
+
+	newM2, _ := nm.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "Hello"}})
+	nm2 := newM2.(Model)
+
+	if len(nm2.messages) != 1 {
+		t.Fatalf("expected 1 flushed thinking message, got %d", len(nm2.messages))
+	}
+	if nm2.messages[0].Role != "thinking" || nm2.messages[0].Content != "Hmm..." {
+		t.Error("thinking content should be flushed to messages")
+	}
+	if nm2.coalesceRole != "assistant" {
+		t.Errorf("expected role switch to assistant, got %q", nm2.coalesceRole)
+	}
+	if nm2.coalesceText != "Hello" {
+		t.Errorf("expected 'Hello' in buffer, got %q", nm2.coalesceText)
+	}
+}
+
+func TestCoalescer_CriticalEventFlushes(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "streaming text"}})
+	nm := newM.(Model)
+
+	newM2, _ := nm.Update(engineEventMsg{event: engine.Event{
+		Type: engine.EventToolUse,
+		Data: map[string]any{"name": "Bash", "input": "ls"},
+	}})
+	nm2 := newM2.(Model)
+
+	if len(nm2.messages) < 2 {
+		t.Fatalf("expected at least 2 messages (text + tool), got %d", len(nm2.messages))
+	}
+	if nm2.messages[0].Role != "assistant" || nm2.messages[0].Content != "streaming text" {
+		t.Error("text should be flushed before tool use")
+	}
+	if nm2.messages[1].Role != "tool" {
+		t.Error("tool use should appear after flushed text")
+	}
+}
+
+func TestCoalescer_SpinnerTickFlushes(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "buffered"}})
+	nm := newM.(Model)
+
+	newM2, _ := nm.Update(spinnerTickMsg{})
+	nm2 := newM2.(Model)
+
+	if nm2.coalesceDirty {
+		t.Error("coalesceDirty should be false after spinner tick flush")
+	}
+	if len(nm2.messages) != 1 {
+		t.Fatalf("expected 1 message after flush, got %d", len(nm2.messages))
+	}
+}
+
+func TestCoalescer_FlushIdempotent(t *testing.T) {
+	m := testModel()
+	m.flushCoalesced()
+	if m.coalesceDirty {
+		t.Error("flush on clean state should be no-op")
+	}
+	if len(m.messages) != 0 {
+		t.Error("flush on clean state should not create messages")
+	}
+}
+
+func TestCoalescer_FlushMergesConsecutive(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	newM, _ := m.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "abc"}})
+	nm := newM.(Model)
+	newM2, _ := nm.Update(engineEventMsg{event: engine.Event{Type: engine.EventText, Data: "def"}})
+	nm2 := newM2.(Model)
+	nm2.flushCoalesced()
+
+	if len(nm2.coalesceText) != 0 {
+		t.Error("buffer should be empty after flush")
+	}
+	if len(nm2.messages) != 1 {
+		t.Fatalf("expected 1 merged message, got %d", len(nm2.messages))
+	}
+	if nm2.messages[0].Content != "abcdef" {
+		t.Errorf("expected 'abcdef', got %q", nm2.messages[0].Content)
 	}
 }

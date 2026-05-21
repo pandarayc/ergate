@@ -11,38 +11,14 @@ import (
 	"strings"
 )
 
-const grepSchema = `{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "The regular expression pattern to search for in file contents"
-    },
-    "path": {
-      "type": "string",
-      "description": "File or directory to search in (defaults to current directory)"
-    },
-    "glob": {
-      "type": "string",
-      "description": "Glob pattern to filter files (e.g. '*.go', '**​/*.ts')"
-    },
-    "output_mode": {
-      "type": "string",
-      "enum": ["content", "files_with_matches", "count"],
-      "description": "Output mode: content shows matching lines, files_with_matches shows file paths, count shows match counts"
-    },
-    "-i": {
-      "type": "boolean",
-      "description": "Case insensitive search"
-    },
-    "head_limit": {
-      "type": "integer",
-      "description": "Limit output to first N matching lines"
-    }
-  },
-  "required": ["pattern"]
-}`
-
+var grepSchema = Schema(map[string]any{
+	"pattern":     map[string]any{"type": "string", "description": "The regular expression pattern to search for in file contents"},
+	"path":        map[string]any{"type": "string", "description": "File or directory to search in (defaults to current directory)"},
+	"glob":        map[string]any{"type": "string", "description": "Glob pattern to filter files (e.g. '*.go', '**/*.ts')"},
+	"output_mode": map[string]any{"type": "string", "enum": []string{"content", "files_with_matches", "count"}, "description": "Output mode: content shows matching lines, files_with_matches shows file paths, count shows match counts"},
+	"-i":          map[string]any{"type": "boolean", "description": "Case insensitive search"},
+	"head_limit":  map[string]any{"type": "integer", "description": "Limit output to first N matching lines"},
+}, []string{"pattern"})
 const grepDescription = `Search for a regular expression pattern in file contents. Returns matching lines with file paths and line numbers. Supports full regex syntax, file filtering via glob patterns, and case-insensitive mode.`
 
 // GrepTool searches file contents using regex.
@@ -56,7 +32,7 @@ func NewGrepTool() *GrepTool {
 		BaseTool: NewBaseTool(
 			"Grep",
 			grepDescription,
-			json.RawMessage(grepSchema),
+			grepSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),

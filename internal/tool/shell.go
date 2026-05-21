@@ -11,24 +11,11 @@ import (
 	"unicode/utf8"
 )
 
-const bashSchema = `{
-  "type": "object",
-  "properties": {
-    "command": {
-      "type": "string",
-      "description": "The bash command to execute"
-    },
-    "description": {
-      "type": "string",
-      "description": "Description of what this command does (for permission review)"
-    },
-    "timeout": {
-      "type": "number",
-      "description": "Timeout in milliseconds (default 120000)"
-    }
-  },
-  "required": ["command"]
-}`
+var bashSchema = Schema(map[string]any{
+	"command":     map[string]any{"type": "string", "description": "The bash command to execute"},
+	"description": map[string]any{"type": "string", "description": "Description of what this command does (for permission review)"},
+	"timeout":     map[string]any{"type": "number", "description": "Timeout in milliseconds (default 120000)"},
+}, []string{"command"})
 
 const bashDescription = `Execute a bash command in the terminal. Use for running tests, building projects, installing dependencies, git operations, file system operations, and other shell commands. Returns stdout and stderr output with exit code.`
 
@@ -43,7 +30,7 @@ func NewBashTool() *BashTool {
 		BaseTool: NewBaseTool(
 			"Bash",
 			bashDescription,
-			json.RawMessage(bashSchema),
+			bashSchema,
 		),
 	}
 }

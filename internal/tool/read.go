@@ -9,24 +9,11 @@ import (
 	"strings"
 )
 
-const readSchema = `{
-  "type": "object",
-  "properties": {
-    "file_path": {
-      "type": "string",
-      "description": "The absolute path to the file to read"
-    },
-    "offset": {
-      "type": "integer",
-      "description": "Line number to start reading from (1-based)"
-    },
-    "limit": {
-      "type": "integer",
-      "description": "Maximum number of lines to read"
-    }
-  },
-  "required": ["file_path"]
-}`
+var readSchema = Schema(map[string]any{
+	"file_path": map[string]any{"type": "string", "description": "The absolute path to the file to read"},
+	"offset":    map[string]any{"type": "integer", "description": "Line number to start reading from (1-based)"},
+	"limit":     map[string]any{"type": "integer", "description": "Maximum number of lines to read"},
+}, []string{"file_path"})
 
 const readDescription = `Read a file from the local filesystem. Returns the file content with line numbers. Supports reading specific line ranges with offset and limit parameters. Supports text files and displays images (PNG, JPG).`
 
@@ -42,7 +29,7 @@ func NewReadTool() *ReadTool {
 		BaseTool: NewBaseTool(
 			"Read",
 			readDescription,
-			json.RawMessage(readSchema),
+			readSchema,
 			WithReadOnly(),
 			WithConcurrencySafe(),
 		),
