@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -109,7 +108,6 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, req *ChatRequest) (<-c
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
-		os.WriteFile("/tmp/ergate_req_body.json", body, 0644)
 		return nil, c.adapter.ParseErrorResponse(resp.StatusCode, respBody, body)
 	}
 

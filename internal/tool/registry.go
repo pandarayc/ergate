@@ -55,6 +55,24 @@ func (r *Registry) List() []Tool {
 	return tools
 }
 
+// RegisterRaw adds an already-constructed tool without duplicate checking.
+func (r *Registry) RegisterRaw(t Tool) {
+	r.mu.Lock()
+	r.tools[t.Name()] = t
+	r.mu.Unlock()
+}
+
+// ToolNames returns the names of all registered tools.
+func (r *Registry) ToolNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	return names
+}
+
 // ToolConfigs returns the tool configurations for the LLM API.
 func (r *Registry) ToolConfigs() []llm.ToolConfig {
 	r.mu.RLock()

@@ -101,7 +101,8 @@ func (t *CreateTool) Execute(ctx context.Context, input json.RawMessage, execCtx
 		}
 
 		// Write output to temp file for later retrieval
-		os.WriteFile("/tmp/ergate_task_"+taskID+".out", output, 0o644)
+			os.MkdirAll(".ergate/tasks", 0o700)
+		os.WriteFile(".ergate/tasks/"+taskID+".out", output, 0o644)
 	}()
 
 	return &tool.ToolResult{
@@ -148,7 +149,7 @@ func (t *OutputTool) Execute(ctx context.Context, input json.RawMessage, execCtx
 	}
 
 	// Try to read output file
-	data, err := os.ReadFile("/tmp/ergate_task_" + in.TaskID + ".out")
+	data, err := os.ReadFile(".ergate/tasks/" + in.TaskID + ".out")
 	content := ""
 	if err == nil {
 		content = string(data)

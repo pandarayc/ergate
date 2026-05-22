@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/engine"
@@ -99,7 +100,21 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 	registry.Register(task.NewOutputTool(taskReg))
 	registry.Register(task.NewStopTool(taskReg))
 	registry.Register(task.NewListTool(taskReg))
-	registry.Register(task.NewAgentTool(taskReg, client, cfg.SubagentModelName(), registry))
+	registry.Register(task.NewAgentTool(taskReg, cfg.SubagentModelName(), func(ctx context.Context, prompt, model string, maxTurns int) string {
+		events := make(chan engine.Event, 64)
+		go func() {
+			_ = eng.RunSubAgent(ctx, prompt, model, maxTurns, events)
+		}()
+		var result strings.Builder
+		for event := range events {
+			if event.Type == engine.EventText {
+				if text, ok := event.Data.(string); ok {
+					result.WriteString(text)
+				}
+			}
+		}
+		return result.String()
+	}))
 	registry.Register(memory.NewWriteTool(memDir, func(path string) {
 		memory.UpdateMEMORYMD(memDir, filepath.Base(path))
 	}))

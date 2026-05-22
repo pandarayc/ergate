@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
-	"github.com/raydraw/ergate/internal/llm"
 	"github.com/raydraw/ergate/internal/tool"
 )
 
@@ -20,17 +20,19 @@ const agentSchema = `{
   "required": ["description", "prompt"]
 }`
 
+// RunSubAgent is a function that runs a sub-agent with limited turns and read-only tools.
+type RunSubAgent func(ctx context.Context, prompt, model string, maxTurns int) string
+
 // AgentTool lets the model spawn sub-agents.
 type AgentTool struct {
-	reg    *Registry
-	client llm.LLMClient
-	model  string
-	tools  *tool.Registry
+	reg         *Registry
+	model       string
+	runSubAgent RunSubAgent
 }
 
 // NewAgentTool creates a sub-agent tool.
-func NewAgentTool(reg *Registry, client llm.LLMClient, model string, tools *tool.Registry) *AgentTool {
-	return &AgentTool{reg: reg, client: client, model: model, tools: tools}
+func NewAgentTool(reg *Registry, model string, runSubAgent RunSubAgent) *AgentTool {
+	return &AgentTool{reg: reg, model: model, runSubAgent: runSubAgent}
 }
 
 func (t *AgentTool) Name() string                { return "Agent" }
@@ -75,7 +77,8 @@ func (t *AgentTool) Execute(ctx context.Context, input json.RawMessage, execCtx 
 		}()
 
 		result := t.runAgent(in.Prompt, model)
-		os.WriteFile("/tmp/ergate_task_"+taskID+".out", []byte(result), 0o644)
+		os.MkdirAll(".ergate/tasks", 0o700)
+			os.WriteFile(".ergate/tasks/"+taskID+".out", []byte(result), 0o644)
 
 		if result != "" {
 			t.reg.SetStatus(taskID, StatusCompleted)
@@ -95,41 +98,10 @@ func (t *AgentTool) Execute(ctx context.Context, input json.RawMessage, execCtx 
 }
 
 func (t *AgentTool) runAgent(prompt, model string) string {
-	ctx := context.Background()
-	req := &llm.ChatRequest{
-		Model:     model,
-		System:    "You are a focused sub-agent. Complete the task and return results concisely. Use available tools to read and search. Do not write or edit files.",
-		Messages:  []llm.Message{llm.NewUserMessage(prompt)},
-		MaxTokens: 4096,
+	if t.runSubAgent == nil {
+		return "Sub-agent runner not configured."
 	}
-
-	// Filter to read-only tools for sub-agents
-	toolConfigs := []llm.ToolConfig{}
-	readOnlyNames := map[string]bool{"Read": true, "Grep": true, "Glob": true, "WebSearch": true, "WebFetch": true}
-	for _, t := range t.tools.List() {
-		if readOnlyNames[t.Name()] && t.IsEnabled() {
-			toolConfigs = append(toolConfigs, llm.ToolConfig{
-				Name:        t.Name(),
-				Description: t.Description(),
-				InputSchema: t.InputSchema(),
-			})
-		}
-	}
-	req.Tools = toolConfigs
-
-	// Two-turn agent: one call
-	resp, err := t.client.Chat(ctx, req)
-	if err != nil {
-		return fmt.Sprintf("Sub-agent error: %v", err)
-	}
-
-	var result string
-	for _, msg := range resp.Messages {
-		for _, block := range msg.Content {
-			if block.Type == "text" {
-				result += block.Text
-			}
-		}
-	}
-	return result
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return t.runSubAgent(ctx, prompt, model, 5)
 }
