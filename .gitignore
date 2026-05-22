@@ -40,3 +40,4 @@ GEMINI.md
 # Config (if contains secrets)
 config.yaml
 .worktrees
+.planning
