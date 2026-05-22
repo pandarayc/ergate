@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/raydraw/ergate/internal/config"
@@ -27,7 +27,7 @@ type Model struct {
 	cfg *config.Config
 	eng *engine.Engine
 
-	input    textinput.Model
+	input    textarea.Model
 	viewport viewport.Model
 
 	messages       []ChatMessage
@@ -91,10 +91,14 @@ func nextSpinnerTick() tea.Cmd {
 
 // NewModel creates a new TUI model.
 func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resume bool) Model {
-	ti := textinput.New()
-	ti.Placeholder = "Type a message..."
-	ti.Prompt = "▸ "
-	ti.Focus()
+	ta := textarea.New()
+	ta.Placeholder = "Type a message..."
+	ta.ShowLineNumbers = false
+	ta.MaxHeight = 5
+	ta.SetPromptFunc(3, func(lineIdx int) string {
+		return "▸ "
+	})
+	ta.Focus()
 
 	vp := viewport.New(80, 20)
 
@@ -104,7 +108,7 @@ func NewModel(cfg *config.Config, eng *engine.Engine, store *session.Store, resu
 	m := Model{
 		cfg:          cfg,
 		eng:          eng,
-		input:        ti,
+		input:        ta,
 		viewport:     vp,
 		messages:     make([]ChatMessage, 0),
 		sessionStore: store,
@@ -156,7 +160,7 @@ func (m *Model) flushCoalesced() {
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		nextSpinnerTick(),
-		textinput.Blink,
+		textarea.Blink,
 	)
 }
 

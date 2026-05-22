@@ -18,8 +18,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.viewport.Width = msg.Width
-		m.viewport.Height = msg.Height - 5
-		m.input.Width = msg.Width - 4
+		m.viewport.Height = msg.Height - 7
+		m.input.SetWidth(msg.Width - 4)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -55,6 +55,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case tea.KeyEnter:
+			if msg.Alt {
+				if !m.running {
+					m.input.InsertString("\n")
+				}
+				return m, nil
+			}
 			if m.running {
 				return m, nil
 			}
@@ -151,8 +157,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Update input when not running
-	if !m.running && !m.permActive {
+	// Update input when not running — skip Enter (handled above)
+	updateInput := !m.running && !m.permActive
+	if updateInput {
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.Type == tea.KeyEnter && !keyMsg.Alt {
+			updateInput = false
+		}
+	}
+	if updateInput {
 		newInput, cmd := m.input.Update(msg)
 		m.input = newInput
 		if cmd != nil {

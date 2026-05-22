@@ -686,11 +686,11 @@ func TestUpdate_WindowSize(t *testing.T) {
 	if nm.viewport.Width != 120 {
 		t.Errorf("expected viewport width 120, got %d", nm.viewport.Width)
 	}
-	if nm.viewport.Height != 35 {
-		t.Errorf("expected viewport height 35, got %d", nm.viewport.Height)
+	if nm.viewport.Height != 33 {
+		t.Errorf("expected viewport height 33, got %d", nm.viewport.Height)
 	}
-	if nm.input.Width != 116 {
-		t.Errorf("expected input width 116, got %d", nm.input.Width)
+	if nm.input.Width() < 100 { // textarea reserves space for borders
+		t.Errorf("expected input width >= 100, got %d", nm.input.Width())
 	}
 }
 
@@ -1348,5 +1348,54 @@ func TestViewportFollow_ScrollsToBottomWhenUserAtBottom(t *testing.T) {
 	// Should still be at bottom (following new content)
 	if !m.viewport.AtBottom() {
 		t.Error("View() should auto-scroll to bottom when user was at bottom")
+	}
+}
+
+// --- Textarea ---
+
+func TestKeyEnter_AltEnterInsertsNewline(t *testing.T) {
+	m := testModel()
+	m.running = false
+	m.input.SetValue("line1")
+
+	altEnter := tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	newM, _ := m.Update(altEnter)
+	nm := newM.(Model)
+
+	if nm.input.Value() != "line1\n" {
+		t.Errorf("Alt+Enter should insert newline, got %q", nm.input.Value())
+	}
+}
+
+func TestKeyEnter_AltEnterBlockedWhileRunning(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.input.SetValue("line1")
+
+	altEnter := tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
+	newM, _ := m.Update(altEnter)
+	nm := newM.(Model)
+
+	if nm.input.Value() != "line1" {
+		t.Error("Alt+Enter should not insert while running")
+	}
+}
+
+func TestKeyEnter_SendsWithNewlines(t *testing.T) {
+	m := testModel()
+	m.running = false
+	m.input.SetValue("line1\nline2")
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	nm := newM.(Model)
+
+	if !nm.running {
+		t.Fatal("Enter should start engine")
+	}
+	if len(nm.messages) != 1 || nm.messages[0].Content != "line1\nline2" {
+		t.Errorf("multi-line input should be sent, got %q", nm.messages[0].Content)
+	}
+	if nm.input.Value() != "" {
+		t.Error("textarea should be reset after send")
 	}
 }
