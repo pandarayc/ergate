@@ -33,9 +33,6 @@ var (
 
 	InputAreaStyle = lipgloss.NewStyle().
 			Background(BgPanel).
-			BorderTop(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			BorderForeground(BorderDim).
 			Padding(0, 1)
 
 	UserMsgStyle = lipgloss.NewStyle().

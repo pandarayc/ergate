@@ -1,0 +1,22 @@
+ Ergate   model: claude-sonnet-4-20250514                                       
+                                                                                
+                                 ▸ build the app                                
+                                                                                
+│ Running tests...                                                              
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ ☐ 3/10 tasks                                                                   
+ ⚙ reading src/engine.go (3s)                                                   
+ ⚑ code-review: done                                                            
+ ⚑ test-runner: running                                                         
+───                                                                             
+┃ Type a message...                                                             
+┃   turn:0 | ctx:0% | cache:100% | $0.0000                                      

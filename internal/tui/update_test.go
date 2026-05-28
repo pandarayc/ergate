@@ -36,6 +36,18 @@ func testModel() Model {
 	return NewModel(cfg, eng, nil, false)
 }
 
+func testModelWithTodos() Model {
+	cfg := config.DefaultConfig()
+	todoMgr := tool.NewTodoManager()
+	todoMgr.Update([]tool.TodoItem{
+		{ID: "1", Status: "pending", Content: "add login page"},
+		{ID: "2", Status: "in_progress", Content: "fix auth bug", ActiveForm: "Fixing auth bug"},
+		{ID: "3", Status: "completed", Content: "setup DB"},
+	})
+	eng := engine.New(cfg, noopLLMClient{}, tool.NewRegistry(), engine.Context{TodoMgr: todoMgr})
+	return NewModel(cfg, eng, nil, false)
+}
+
 // --- KeyEnter ---
 
 func TestUpdate_KeyEnter_EmptyInput(t *testing.T) {
@@ -276,11 +288,14 @@ func TestUpdate_EngineEvent_ToolResult_Success(t *testing.T) {
 	}
 }
 
-func TestUpdate_EngineEvent_ToolResult_Truncation(t *testing.T) {
+func TestUpdate_EngineEvent_ToolResult_FoldShort(t *testing.T) {
 	m := testModel()
 	m.running = true
 	m.eventChan = make(chan engine.Event, 1)
 
+	// 300-char single line wraps to ~8 visual lines at width 70.
+	// <= 8 visual lines → NOT collapsed.
+	m.width = 80
 	long := make([]byte, 300)
 	for i := range long {
 		long[i] = 'x'
@@ -296,12 +311,48 @@ func TestUpdate_EngineEvent_ToolResult_Truncation(t *testing.T) {
 	newM, _ := m.Update(engineEventMsg{event: evt})
 	nm := newM.(Model)
 
-	// truncateStr adds "... (expand with Enter)" suffix (23 chars)
-	if len(nm.messages[0].Content) != 200+23 {
-		t.Errorf("expected truncated content length 223 (200 max + suffix), got %d", len(nm.messages[0].Content))
+	// Content is stored as-is; fold is computed at render time.
+	if nm.messages[0].Content != string(long) {
+		t.Error("full content should be stored in Content")
 	}
 	if nm.messages[0].Detail != string(long) {
 		t.Error("full content should be stored in Detail")
+	}
+}
+
+func TestUpdate_EngineEvent_ToolResult_FoldLong(t *testing.T) {
+	m := testModel()
+	m.width = 80
+	m.running = true
+	m.eventChan = make(chan engine.Event, 1)
+
+	lines := make([]string, 12)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	content := strings.Join(lines, "\n")
+
+	evt := engine.Event{
+		Type: engine.EventToolResult,
+		Data: map[string]any{
+			"name":     "Read",
+			"content":  content,
+			"is_error": false,
+		},
+	}
+	newM, _ := m.Update(engineEventMsg{event: evt})
+	nm := newM.(Model)
+
+	// Content stored as-is; fold happens at render time.
+	if nm.messages[0].Content != content {
+		t.Error("full content should be stored")
+	}
+	if nm.messages[0].Detail != content {
+		t.Error("full content should be stored in Detail")
+	}
+	// Collapsed is set at render time, not event time.
+	if nm.messages[0].Collapsed {
+		t.Error("Collapsed should be false until render")
 	}
 }
 
@@ -438,60 +489,57 @@ func TestUpdate_EngineEvent_TokenUpdateOnStop(t *testing.T) {
 
 func TestUpdate_PermActive_UpDown(t *testing.T) {
 	m := testModel()
-	m.permActive = true
-	m.permSelected = 2
+	m.overlay = &Overlay{Kind: OverlayPermission, Selected: 2}
 
 	// Up
 	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if m2.(Model).permSelected != 1 {
-		t.Error("up should decrement permSelected")
+	if m2.(Model).overlay.Selected != 1 {
+		t.Error("up should decrement Selected")
 	}
 	// Down
 	m3, _ := m2.(Model).Update(tea.KeyMsg{Type: tea.KeyDown})
-	if m3.(Model).permSelected != 2 {
-		t.Error("down should increment permSelected")
+	if m3.(Model).overlay.Selected != 2 {
+		t.Error("down should increment Selected")
 	}
 }
 
 func TestUpdate_PermActive_UpBoundary(t *testing.T) {
 	m := testModel()
-	m.permActive = true
-	m.permSelected = 0
+	m.overlay = &Overlay{Kind: OverlayPermission, Selected: 0}
 
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if newM.(Model).permSelected != 0 {
+	if newM.(Model).overlay.Selected != 0 {
 		t.Error("up at 0 should not change")
 	}
 }
 
 func TestUpdate_PermActive_DownBoundary(t *testing.T) {
 	m := testModel()
-	m.permActive = true
-	m.permSelected = 3
+	m.overlay = &Overlay{Kind: OverlayPermission, Selected: 3}
 
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if newM.(Model).permSelected != 3 {
+	if newM.(Model).overlay.Selected != 3 {
 		t.Error("down at 3 should not go past boundary")
 	}
 }
 
 func TestUpdate_PermActive_EnterDismiss(t *testing.T) {
 	m := testModel()
-	m.permActive = true
+	m.overlay = &Overlay{Kind: OverlayPermission}
 
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if newM.(Model).permActive {
-		t.Error("Enter should dismiss perm dialog")
+	if newM.(Model).overlay != nil {
+		t.Error("Enter should dismiss overlay")
 	}
 }
 
 func TestUpdate_PermActive_EscDismiss(t *testing.T) {
 	m := testModel()
-	m.permActive = true
+	m.overlay = &Overlay{Kind: OverlayPermission}
 
 	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if newM.(Model).permActive {
-		t.Error("Esc should dismiss perm dialog")
+	if newM.(Model).overlay != nil {
+		t.Error("Esc should dismiss overlay")
 	}
 }
 
@@ -686,8 +734,8 @@ func TestUpdate_WindowSize(t *testing.T) {
 	if nm.viewport.Width != 120 {
 		t.Errorf("expected viewport width 120, got %d", nm.viewport.Width)
 	}
-	if nm.viewport.Height != 33 {
-		t.Errorf("expected viewport height 33, got %d", nm.viewport.Height)
+	if nm.viewport.Height != 35 {
+		t.Errorf("expected viewport height 35, got %d", nm.viewport.Height)
 	}
 	if nm.input.Width() < 100 { // textarea reserves space for borders
 		t.Errorf("expected input width >= 100, got %d", nm.input.Width())
@@ -966,14 +1014,14 @@ func TestEngineEventJSON(t *testing.T) {
 
 func TestRenderMessage_CachesOutput(t *testing.T) {
 	msg := &ChatMessage{Role: "assistant", Content: "hello **world**"}
-	r1 := renderMessage(msg)
+	r1 := renderMessage(msg, 80)
 	if r1 == "" {
 		t.Fatal("renderMessage returned empty string")
 	}
 	if msg.rendered == "" {
 		t.Error("rendered cache should be set after first render")
 	}
-	r2 := renderMessage(msg)
+	r2 := renderMessage(msg, 80)
 	if r1 != r2 {
 		t.Error("second render should return cached result")
 	}
@@ -983,7 +1031,7 @@ func TestRenderMessage_CacheBustOnContentChange(t *testing.T) {
 	m := testModel()
 	m.running = true
 	m.messages = []ChatMessage{{Role: "assistant", Content: "Hello"}}
-	renderMessage(&m.messages[0])
+	renderMessage(&m.messages[0], 80)
 	if m.messages[0].rendered == "" {
 		t.Fatal("expected cached render")
 	}
@@ -999,7 +1047,7 @@ func TestRenderMessage_CacheBustOnThinkingChange(t *testing.T) {
 	m := testModel()
 	m.running = true
 	m.messages = []ChatMessage{{Role: "thinking", Content: "Hmm"}}
-	renderMessage(&m.messages[0])
+	renderMessage(&m.messages[0], 80)
 	if m.messages[0].rendered == "" {
 		t.Fatal("expected cached render")
 	}
@@ -1353,6 +1401,32 @@ func TestViewportFollow_ScrollsToBottomWhenUserAtBottom(t *testing.T) {
 
 // --- Textarea ---
 
+func TestKeyCtrlJ_InsertsNewline(t *testing.T) {
+	m := testModel()
+	m.running = false
+	m.input.SetValue("line1")
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	nm := newM.(Model)
+
+	if nm.input.Value() != "line1\n" {
+		t.Errorf("Ctrl+J should insert newline, got %q", nm.input.Value())
+	}
+}
+
+func TestKeyCtrlJ_BlockedWhileRunning(t *testing.T) {
+	m := testModel()
+	m.running = true
+	m.input.SetValue("line1")
+
+	newM, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	nm := newM.(Model)
+
+	if nm.input.Value() != "line1" {
+		t.Error("Ctrl+J should not insert while running")
+	}
+}
+
 func TestKeyEnter_AltEnterInsertsNewline(t *testing.T) {
 	m := testModel()
 	m.running = false
@@ -1378,6 +1452,67 @@ func TestKeyEnter_AltEnterBlockedWhileRunning(t *testing.T) {
 
 	if nm.input.Value() != "line1" {
 		t.Error("Alt+Enter should not insert while running")
+	}
+}
+
+func TestRefreshToolsBar_Todos(t *testing.T) {
+	m := testModelWithTodos()
+	m.refreshToolsBar()
+
+	if len(m.toolsBar.Items) != 3 {
+		t.Fatalf("expected 3 toolsbar items, got %d", len(m.toolsBar.Items))
+	}
+	if m.toolsBar.Items[0].Icon != "☐" || m.toolsBar.Items[0].Label != "add login page" {
+		t.Errorf("item 0: got %s %s", m.toolsBar.Items[0].Icon, m.toolsBar.Items[0].Label)
+	}
+	if m.toolsBar.Items[1].Icon != "▶" || m.toolsBar.Items[1].Label != "Fixing auth bug" {
+		t.Errorf("item 1: got %s %s (expected activeForm)", m.toolsBar.Items[1].Icon, m.toolsBar.Items[1].Label)
+	}
+	if m.toolsBar.Items[2].Icon != "✓" || m.toolsBar.Items[2].Label != "setup DB" {
+		t.Errorf("item 2: got %s %s", m.toolsBar.Items[2].Icon, m.toolsBar.Items[2].Label)
+	}
+}
+
+func TestRefreshToolsBar_RunningTool(t *testing.T) {
+	m := testModel()
+	m.currentToolName = "Read"
+	m.refreshToolsBar()
+
+	if len(m.toolsBar.Items) != 1 {
+		t.Fatalf("expected 1 tool item, got %d", len(m.toolsBar.Items))
+	}
+	if m.toolsBar.Items[0].Icon != "⚙" || m.toolsBar.Items[0].Label != "Read..." {
+		t.Errorf("got %s %s", m.toolsBar.Items[0].Icon, m.toolsBar.Items[0].Label)
+	}
+}
+
+func TestRefreshToolsBar_RunningToolAndTodos(t *testing.T) {
+	m := testModelWithTodos()
+	m.currentToolName = "Bash"
+	m.refreshToolsBar()
+
+	if len(m.toolsBar.Items) != 4 {
+		t.Fatalf("expected 4 items (1 tool + 3 todos), got %d", len(m.toolsBar.Items))
+	}
+	if m.toolsBar.Items[0].Icon != "⚙" || m.toolsBar.Items[0].Label != "Bash..." {
+		t.Errorf("first item should be running tool, got %s %s", m.toolsBar.Items[0].Icon, m.toolsBar.Items[0].Label)
+	}
+}
+
+func TestRefreshToolsBar_ClearOnDone(t *testing.T) {
+	m := testModelWithTodos()
+	m.currentToolName = "Read"
+	m.refreshToolsBar()
+	if len(m.toolsBar.Items) != 4 {
+		t.Fatalf("expected 4 items before clear, got %d", len(m.toolsBar.Items))
+	}
+
+	// Simulate done: clear tool, remove todos
+	m.currentToolName = ""
+	m.refreshToolsBar()
+	// todos persist in toolsbar until explicitly cleared or next turn
+	if len(m.toolsBar.Items) != 3 {
+		t.Fatalf("todos should persist after tool done, got %d", len(m.toolsBar.Items))
 	}
 }
 

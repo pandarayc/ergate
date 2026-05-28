@@ -97,14 +97,17 @@ func (m *TodoManager) Update(items []TodoItem) (string, error) {
 	copy(m.items, items)
 	m.roundsSinceTodo = 0
 
-	return m.Render(), nil
+	return m.renderLocked(), nil
 }
 
 // Render formats the current todo list as a string.
 func (m *TodoManager) Render() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.renderLocked()
+}
 
+func (m *TodoManager) renderLocked() string {
 	if len(m.items) == 0 {
 		return "No tasks."
 	}

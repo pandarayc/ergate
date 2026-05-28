@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/raydraw/ergate/internal/cachestability"
 	"github.com/raydraw/ergate/internal/compact"
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/filehistory"
@@ -63,9 +64,10 @@ type Engine struct {
 	hookMgr     *hooks.Manager
 	fileTracker *filehistory.Tracker
 	planMgr     *planmode.Manager
-	taskNotify  <-chan task.Notification
-	todoMgr     *tool.TodoManager
-	permCtx      tool.PermissionContext
+	taskNotify     <-chan task.Notification
+	todoMgr        *tool.TodoManager
+	cacheStability *cachestability.Manager
+	permCtx         tool.PermissionContext
 	transcriptDir string
 }
 
@@ -164,6 +166,42 @@ func (e *Engine) TotalUsage() (in, out int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.usage.InputTokens, e.usage.OutputTokens
+}
+
+// TodoItems returns a copy of the current todo list.
+func (e *Engine) TodoItems() []tool.TodoItem {
+	if e.todoMgr == nil {
+		return nil
+	}
+	return e.todoMgr.Items()
+}
+
+// TaskCount returns the number of active background tasks.
+func (e *Engine) TaskCount() (running, done int) {
+	// taskNotify is a channel from Registry; we don't have direct access.
+	// For now return the count from the engine context.
+	return 0, 0
+}
+
+// CacheRatio returns the prefix-cache stability ratio (0-100).
+// Returns 100 if the stability manager hasn't been initialized yet.
+func (e *Engine) CacheRatio() int {
+	if e.cacheStability == nil {
+		return 100
+	}
+	return e.cacheStability.RatioPercent()
+}
+
+// CacheLastChange returns a description of the last prefix-cache change, or empty if stable.
+func (e *Engine) CacheLastChange() string {
+	if e.cacheStability == nil {
+		return ""
+	}
+	ch := e.cacheStability.LastChange()
+	if ch == nil {
+		return ""
+	}
+	return ch.Description()
 }
 
 // Run processes a single user input through the query loop.
@@ -340,10 +378,21 @@ func (e *Engine) buildRequest() *llm.ChatRequest {
 	copy(messages, e.messages)
 	e.mu.Unlock()
 
+	sysPrompt := e.buildSystemPrompt()
+	toolNames := e.tools.ToolNames()
+
+	// Prefix cache stability check (first call initializes, subsequent calls compare).
+	if e.cacheStability == nil {
+		e.cacheStability = cachestability.New(sysPrompt, toolNames)
+	} else if ch := e.cacheStability.Check(sysPrompt, toolNames); ch != nil {
+		// Cache busted; could emit event here if needed.
+		_ = ch
+	}
+
 	opts := e.cfg.ActiveModelOptions()
 	return &llm.ChatRequest{
 		Model:          e.cfg.Model,
-		System:         e.buildSystemPrompt(),
+		System:         sysPrompt,
 		Messages:       messages,
 		Tools:          e.tools.ToolConfigs(),
 		MaxTokens:      e.cfg.MaxTokens,

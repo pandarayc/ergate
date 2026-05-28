@@ -1,0 +1,22 @@
+ Ergate   model: claude-sonnet-4-20250514                                       
+                                                                                
+                                 ▸ hello                                        
+                                                                                
+│ Hi there! How can I help?                                                     
+                                                                                
+                                                                                
+▸ read main.go                                                                  
+⚙ Read                                                                          
+  package main                                                                  
+                                                                                
+  func main() {                                                                 
+      fmt.Println("hello")                                                      
+  }                                                                             
+                                                                                
+│ The file contains a simple main function.                                     
+                                                                                
+                                                                                
+                                                                                
+───                                                                             
+┃ Type a message...                                                             
+┃   turn:0 | ctx:0% | cache:100% | $0.0000                                      

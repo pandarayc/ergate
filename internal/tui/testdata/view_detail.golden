@@ -1,0 +1,34 @@
+ Ergate   model: claude-sonnet-4-20250514                                       
+                                                                                
+                                                                                
+ Welcome to Ergate!                                                             
+                                                                                
+   Ctrl+C  Quit                                                                 
+   ↑/↓     Scroll                                                               
+   Ctrl+P  Previous input                                                       
+   Ctrl+N  Next input                                                           
+   PgUp/Dn Page scroll                                                          
+                                                                                
+ Type a message to start...                                                     
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+╭────────────────────────────────────────────────────────────────╮              
+│  ⚙ Read                                                        │              
+│   / to search                                                  │              
+│ ────────────────────────────────────────────────────────────   │              
+│ package main                                                   │              
+│                                                                │              
+│ import "fmt"                                                   │              
+│                                                                │              
+│ func main() {                                                  │              
+│     fmt.Println("hello world")                                 │              
+│ }                                                              │              
+│                                                                │              
+│                                                                │              
+│   ↑↓/jk scroll · PgUp/PgDn · / search · Esc close              │              
+╰────────────────────────────────────────────────────────────────╯              

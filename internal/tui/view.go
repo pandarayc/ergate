@@ -46,7 +46,7 @@ func (m Model) View() string {
 			if msg.Role == "assistant" && prevRole != "assistant" {
 				b.WriteString("\n")
 			}
-			b.WriteString(renderMessage(msg))
+			b.WriteString(renderMessage(msg, m.viewport.Width))
 			b.WriteString("\n")
 			prevRole = msg.Role
 		}
@@ -61,25 +61,54 @@ func (m Model) View() string {
 		b.WriteString(SpinnerStyle.Render(spinnerText + "\n"))
 	}
 
-	b.WriteString("\n")
+	// Sync layout before rendering viewport.
+	m.syncInputHeight()
+	m.syncViewportHeight()
 
-	// Set viewport — preserve scroll position when user scrolled up
-	atBottom := m.viewport.AtBottom()
+	// Set viewport — preserve scroll position when user scrolled up,
+	// except after session restore which forces scroll to bottom.
+	atBottom := m.viewport.AtBottom() || m.forceScrollBottom
 	m.viewport.SetContent(b.String())
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
+	m.forceScrollBottom = false
 
-	// Permission dialog
+	// Tools bar — between viewport and spacer, no accent.
 	var bottom strings.Builder
-	if m.permActive {
-		bottom.WriteString(renderPermDialog(m.permToolName, m.permSummary, m.permSelected, m.width))
+	if tb := m.toolsBar.View(m.width); tb != "" {
+		bottom.WriteString(tb)
 		bottom.WriteString("\n")
 	}
 
-	// Input area
+	// Spacer
+	spacerColor := lipgloss.NewStyle().Foreground(BorderDim)
+	bottom.WriteString(spacerColor.Render("───"))
+	bottom.WriteString("\n")
+
+	accentBar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("┃")
+
+	if m.overlay != nil {
+		switch m.overlay.Kind {
+		case OverlayPermission:
+			bottom.WriteString(accentBar)
+			bottom.WriteString(renderPermDialog(m.overlay.ToolName, m.overlay.Summary, m.overlay.Selected, m.width))
+			bottom.WriteString("\n")
+		case OverlayDetail:
+			// Render detail as centered modal, then skip footer.
+			detailView := renderDetailOverlay(m.overlay, m.width, m.height)
+			return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), detailView)
+		}
+	}
+
+	// Input area.
 	inputView := InputAreaStyle.Render(m.input.View())
-	bottom.WriteString(inputView)
+	for i, line := range strings.Split(inputView, "\n") {
+		if i > 0 {
+			bottom.WriteString("\n")
+		}
+		bottom.WriteString(accentBar + line)
+	}
 	bottom.WriteString("\n")
 
 	// Status bar
@@ -90,22 +119,30 @@ func (m Model) View() string {
 		ctxPct = totalTokens * 100 / 128000
 	}
 	cost := estimateCost(m.cfg.Model, in, out)
-	status := fmt.Sprintf(" turn:%d | ctx:%d%% | $%.4f", m.currentTurn, ctxPct, cost)
+	cacheRatio := m.eng.CacheRatio()
+	cachePart := fmt.Sprintf(" | cache:%d%%", cacheRatio)
+	if cacheRatio < 100 {
+		cachePart = fmt.Sprintf(" | %s", lipgloss.NewStyle().Foreground(Warning).Render(fmt.Sprintf("cache:%d%%", cacheRatio)))
+	}
+	status := fmt.Sprintf(" turn:%d | ctx:%d%%%s | $%.4f", m.currentTurn, ctxPct, cachePart, cost)
 	if m.sessionID != "" {
 		status += fmt.Sprintf(" | %s", truncateStr(m.sessionID, 12))
 	}
 	if m.running {
 		status = " ⏳" + status
 	}
-	bottom.WriteString(StatusBarStyle.Render(" " + status + " "))
+	statusLine := StatusBarStyle.Render(" " + status + " ")
+	bottom.WriteString(accentBar + statusLine)
 
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), bottom.String())
 }
 
-func renderMessage(msg *ChatMessage) string {
+func renderMessage(msg *ChatMessage, vpWidth int) string {
 	if msg.rendered != "" {
 		return msg.rendered
 	}
+	// Content area width: viewport minus left padding/border.
+	contentW := max(vpWidth-4, 20)
 	var result string
 	switch msg.Role {
 	case "user":
@@ -116,14 +153,52 @@ func renderMessage(msg *ChatMessage) string {
 			result = AssistantBorderStyle.Render("│") + " " + AssistantTextStyle.Render(rendered)
 		}
 	case "tool":
-		s := AssistantToolStyle.Render(msg.Content)
-		if msg.Detail != "" {
-			display := renderToolDetail(msg.Content, msg.Detail)
-			s += "\n" + ToolResultStyle.Render(display)
+		src := msg.Content
+		if msg.Detail != "" && msg.Content != msg.Detail {
+			src = msg.Detail // use Detail for fold check on tool USE (input) and RESULT (output)
 		}
-		result = s
+		display, overflow, total := foldToolOutput(src, contentW)
+		// First render: detect overflow and mark collapsed.
+		if overflow && msg.rendered == "" {
+			msg.Collapsed = true
+			msg.wasFolded = true
+		}
+		if msg.Collapsed && overflow {
+			remaining := total - maxToolOutputLines + 1
+			fold := lipgloss.NewStyle().Foreground(Accent).Render(
+				fmt.Sprintf("[+] %d more lines — click to expand", remaining),
+			)
+			result = AssistantToolStyle.Render(display) + "\n" + fold
+		} else if !msg.Collapsed && overflow {
+			collapse := lipgloss.NewStyle().Foreground(Accent).Render("[-] click to collapse")
+			result = AssistantToolStyle.Render(src) + "\n" + collapse
+		} else {
+			s := AssistantToolStyle.Render(msg.Content)
+			if msg.Detail != "" && msg.Content != msg.Detail {
+				disp := renderToolDetail(msg.Content, msg.Detail)
+				s += "\n" + ToolResultStyle.Render(disp)
+			}
+			result = s
+		}
 	case "thinking":
-		result = ThinkingStyle.Render("[thinking] " + truncateStr(msg.Content, 80))
+		thinkW := max(contentW-12, 20) // "[thinking] " prefix
+		display, overflow, total := foldToolOutput(msg.Content, thinkW)
+		if overflow && msg.rendered == "" {
+			msg.Collapsed = true
+			msg.wasFolded = true
+		}
+		if msg.Collapsed && overflow {
+			remaining := total - maxToolOutputLines + 1
+			fold := lipgloss.NewStyle().Foreground(Accent).Render(
+				fmt.Sprintf("[+] %d more lines — click to expand", remaining),
+			)
+			result = ThinkingStyle.Width(contentW).Render("[thinking] " + display) + "\n" + fold
+		} else if !msg.Collapsed && overflow {
+			collapse := lipgloss.NewStyle().Foreground(Accent).Render("[-] click to collapse")
+			result = ThinkingStyle.Width(contentW).Render("[thinking] " + msg.Content) + "\n" + collapse
+		} else {
+			result = ThinkingStyle.Width(contentW).Render("[thinking] " + msg.Content)
+		}
 	case "error":
 		result = ErrorStyle.Render("✖ " + msg.Content)
 	case "system":

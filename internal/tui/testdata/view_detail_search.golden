@@ -1,0 +1,33 @@
+ Ergate   model: claude-sonnet-4-20250514                                       
+                                                                                
+                                                                                
+ Welcome to Ergate!                                                             
+                                                                                
+   Ctrl+C  Quit                                                                 
+   ↑/↓     Scroll                                                               
+   Ctrl+P  Previous input                                                       
+   Ctrl+N  Next input                                                           
+   PgUp/Dn Page scroll                                                          
+                                                                                
+ Type a message to start...                                                     
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+╭────────────────────────────────────────────────────────────────╮              
+│  ⚙ Read                                                        │              
+│  > src                                                         │              
+│   2. line two src/main.go                                      │              
+│   4. line four src/engine.go                                   │              
+│ ────────────────────────────────────────────────────────────   │              
+│ line one                                                       │              
+│ line two src/main.go                                           │              
+│ line three                                                     │              
+│ line four src/engine.go                                        │              
+│ line five                                                      │              
+│                                                                │              
+│   Ctrl+P/N match · Enter jump · Esc search off · q close       │              
+╰────────────────────────────────────────────────────────────────╯              
