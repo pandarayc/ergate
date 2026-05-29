@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -277,4 +278,58 @@ func renderDetailHints(o *Overlay, w int) string {
 	return lipgloss.NewStyle().Foreground(Muted).Width(w).Render(
 		"  ↑↓/jk scroll · PgUp/PgDn · / search · Esc close",
 	)
+}
+
+// handleDetailSearchKey handles keyboard input in detail search mode.
+func handleDetailSearchKey(o *Overlay, msg tea.KeyMsg) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		o.DetailSearchMode = false
+		o.DetailSearchQ = ""
+		o.DetailMatches = nil
+
+	case tea.KeyEnter:
+		if o.DetailMatchIdx >= 0 && o.DetailMatchIdx < len(o.DetailMatches) {
+			o.DetailScroll = o.DetailMatches[o.DetailMatchIdx].Line
+			o.DetailSearchMode = false
+		}
+
+	case tea.KeyCtrlP:
+		if len(o.DetailMatches) > 0 {
+			if o.DetailMatchIdx > 0 {
+				o.DetailMatchIdx--
+			} else {
+				o.DetailMatchIdx = len(o.DetailMatches) - 1
+			}
+			if o.DetailMatchIdx < o.DetailMatchOff {
+				o.DetailMatchOff = o.DetailMatchIdx
+			}
+		}
+
+	case tea.KeyCtrlN:
+		if len(o.DetailMatches) > 0 {
+			if o.DetailMatchIdx < len(o.DetailMatches)-1 {
+				o.DetailMatchIdx++
+			} else {
+				o.DetailMatchIdx = 0
+			}
+			if o.DetailMatchIdx >= o.DetailMatchOff+detailDropdownN {
+				o.DetailMatchOff = o.DetailMatchIdx - detailDropdownN + 1
+			}
+		}
+
+	case tea.KeyBackspace:
+		if len(o.DetailSearchQ) > 0 {
+			o.DetailSearchQ = o.DetailSearchQ[:len(o.DetailSearchQ)-1]
+			o.DetailMatches = detailSearch(o.DetailContent, o.DetailSearchQ)
+			o.DetailMatchIdx = 0
+			o.DetailMatchOff = 0
+		}
+
+	case tea.KeyRunes:
+		o.DetailSearchQ += string(msg.Runes)
+		o.DetailMatches = detailSearch(o.DetailContent, o.DetailSearchQ)
+		o.DetailMatchIdx = 0
+		o.DetailMatchOff = 0
+	}
 }

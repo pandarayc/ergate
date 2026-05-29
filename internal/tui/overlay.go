@@ -15,6 +15,32 @@ type DetailMatch struct {
 	Text string // the matching line text (truncated for display)
 }
 
+// OverlayManager manages a single-layer overlay stack.
+// nil active means no overlay is shown.
+type OverlayManager struct {
+	active *Overlay
+}
+
+// Show activates an overlay.
+func (om *OverlayManager) Show(o *Overlay) {
+	om.active = o
+}
+
+// Hide dismisses the current overlay.
+func (om *OverlayManager) Hide() {
+	om.active = nil
+}
+
+// IsActive returns true if an overlay is currently shown.
+func (om *OverlayManager) IsActive() bool {
+	return om.active != nil
+}
+
+// Active returns the current overlay, or nil.
+func (om *OverlayManager) Active() *Overlay {
+	return om.active
+}
+
 // Overlay represents a blocking UI element (dialog, picker, prompt).
 // nil means no overlay is active.
 type Overlay struct {

@@ -384,39 +384,6 @@ func (m *Model) handleDetailSearchKey(msg tea.KeyMsg) {
 	}
 }
 
-const maxToolOutputLines = 8
-
-// foldToolOutput decides how to display tool output.
-// If content exceeds maxToolOutputLines visual lines, it's collapsed.
-// width is the available column width for line wrapping calculation.
-func foldToolOutput(content string, width int) (display string, collapsed bool, totalLines int) {
-	totalLines = visualLineCount(content, width)
-	if totalLines <= maxToolOutputLines {
-		return content, false, totalLines
-	}
-	// Build display: show enough physical lines to fit ~7 visual lines.
-	lines := strings.Split(content, "\n")
-	visual := 0
-	cut := 0
-	for i, line := range lines {
-		lineWidth := len([]rune(line))
-		if lineWidth == 0 {
-			visual++
-		} else {
-			visual += (lineWidth + width - 1) / width
-		}
-		if visual >= maxToolOutputLines-1 {
-			cut = i + 1
-			break
-		}
-	}
-	if cut == 0 || cut > len(lines) {
-		cut = len(lines)
-	}
-	display = strings.Join(lines[:cut], "\n")
-	return display, true, totalLines
-}
-
 // handleViewportClick processes a left-click in the viewport (message area).
 // Returns true if the click was consumed.
 func (m *Model) handleViewportClick(mouseY int) bool {

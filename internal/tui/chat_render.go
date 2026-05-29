@@ -8,12 +8,8 @@ import (
 	"github.com/raydraw/ergate/internal/util"
 )
 
-// View renders the full screen.
-func (m Model) View() string {
-	if m.quitting {
-		return "\n  Goodbye!\n\n"
-	}
-
+// View renders the chat page.
+func (m *ChatModel) View() string {
 	var b strings.Builder
 
 	// Header (fixed at top)
@@ -26,30 +22,15 @@ func (m Model) View() string {
 		welcome := lipgloss.NewStyle().Foreground(Muted).Padding(1).Render(
 			"Welcome to Ergate!\n\n" +
 				"  Ctrl+C  Quit\n" +
-				"  ↑/↓     Scroll\n" +
+				"  ↑/↓     Input history\n" +
+				"  PgUp/Dn Scroll viewport\n" +
 				"  Ctrl+P  Previous input\n" +
 				"  Ctrl+N  Next input\n" +
-				"  PgUp/Dn Page scroll\n" +
 				"\nType a message to start...",
 		)
 		b.WriteString(welcome)
 	} else {
-		// Messages with separation
-		var prevRole string
-		for i := range m.messages {
-			msg := &m.messages[i]
-			// Add blank line between user messages and previous content
-			if msg.Role == "user" && prevRole != "" && prevRole != "user" {
-				b.WriteString("\n")
-			}
-			// Add left border accent for assistant blocks
-			if msg.Role == "assistant" && prevRole != "assistant" {
-				b.WriteString("\n")
-			}
-			b.WriteString(renderMessage(msg, m.viewport.Width))
-			b.WriteString("\n")
-			prevRole = msg.Role
-		}
+		b.WriteString(m.renderContent())
 	}
 
 	// Spinner with context
@@ -62,7 +43,7 @@ func (m Model) View() string {
 	}
 
 	// Sync layout before rendering viewport.
-	m.syncInputHeight()
+	m.input.SyncHeight()
 	m.syncViewportHeight()
 
 	// Set viewport — preserve scroll position when user scrolled up,
@@ -74,8 +55,10 @@ func (m Model) View() string {
 	}
 	m.forceScrollBottom = false
 
-	// Tools bar — between viewport and spacer, no accent.
+	// Footer area outside viewport.
 	var bottom strings.Builder
+
+	// Tools bar — between viewport and spacer.
 	if tb := m.toolsBar.View(m.width); tb != "" {
 		bottom.WriteString(tb)
 		bottom.WriteString("\n")
@@ -87,19 +70,6 @@ func (m Model) View() string {
 	bottom.WriteString("\n")
 
 	accentBar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("┃")
-
-	if m.overlay != nil {
-		switch m.overlay.Kind {
-		case OverlayPermission:
-			bottom.WriteString(accentBar)
-			bottom.WriteString(renderPermDialog(m.overlay.ToolName, m.overlay.Summary, m.overlay.Selected, m.width))
-			bottom.WriteString("\n")
-		case OverlayDetail:
-			// Render detail as centered modal, then skip footer.
-			detailView := renderDetailOverlay(m.overlay, m.width, m.height)
-			return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), detailView)
-		}
-	}
 
 	// Input area.
 	inputView := InputAreaStyle.Render(m.input.View())
@@ -137,12 +107,42 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), bottom.String())
 }
 
-func renderMessage(msg *ChatMessage, vpWidth int) string {
-	if msg.rendered != "" {
+// renderContent builds the message viewport content from cached renders.
+// Only the last maxVisible messages are included.
+func (m *ChatModel) renderContent() string {
+	const maxVisible = 50
+	msgs := m.messages
+	start := 0
+	if len(msgs) > maxVisible {
+		start = len(msgs) - maxVisible
+	}
+
+	var b strings.Builder
+	var prevRole string
+	for i := start; i < len(msgs); i++ {
+		msg := &msgs[i]
+		// Separation
+		if msg.Role == "user" && prevRole != "" && prevRole != "user" {
+			b.WriteString("\n")
+		}
+		if msg.Role == "assistant" && prevRole != "assistant" {
+			b.WriteString("\n")
+		}
+		// Render (cached)
+		b.WriteString(m.renderMessage(msg))
+		b.WriteString("\n")
+		prevRole = msg.Role
+	}
+	return b.String()
+}
+
+// renderMessage renders a single message, caching the result.
+func (m *ChatModel) renderMessage(msg *ChatMessage) string {
+	if !msg.dirty && msg.rendered != "" {
 		return msg.rendered
 	}
-	// Content area width: viewport minus left padding/border.
-	contentW := max(vpWidth-4, 20)
+
+	contentW := max(m.viewport.Width-4, 20)
 	var result string
 	switch msg.Role {
 	case "user":
@@ -155,10 +155,9 @@ func renderMessage(msg *ChatMessage, vpWidth int) string {
 	case "tool":
 		src := msg.Content
 		if msg.Detail != "" && msg.Content != msg.Detail {
-			src = msg.Detail // use Detail for fold check on tool USE (input) and RESULT (output)
+			src = msg.Detail
 		}
 		display, overflow, total := foldToolOutput(src, contentW, maxToolOutputLines)
-		// First render: detect overflow and mark collapsed.
 		if overflow && msg.rendered == "" {
 			msg.Collapsed = true
 			msg.wasFolded = true
@@ -181,7 +180,7 @@ func renderMessage(msg *ChatMessage, vpWidth int) string {
 			result = s
 		}
 	case "thinking":
-		thinkW := max(contentW-12, 20) // "[thinking] " prefix
+		thinkW := max(contentW-12, 20)
 		display, overflow, total := foldToolOutput(msg.Content, thinkW, maxThinkingLines)
 		if overflow && msg.rendered == "" {
 			msg.Collapsed = true
@@ -206,36 +205,37 @@ func renderMessage(msg *ChatMessage, vpWidth int) string {
 	default:
 		result = msg.Content
 	}
+
 	msg.rendered = result
+	msg.dirty = false
 	return result
 }
 
-func renderPermDialog(toolName, summary string, selected int, width int) string {
-	opts := []string{"Allow Once", "Always Allow", "Deny", "Always Deny"}
-	dialogW := width * 60 / 100
-	if dialogW > 72 {
-		dialogW = 72
-	}
-	if dialogW < 40 {
-		dialogW = 40
-	}
-	title := " Permission Required "
-	var b strings.Builder
-	b.WriteString("┌" + strings.Repeat("─", dialogW-2) + "┐\n")
-	b.WriteString(fmt.Sprintf("│ %-*s │\n", dialogW-4, title))
-	b.WriteString(fmt.Sprintf("│ Tool: %-*s │\n", dialogW-10, toolName))
-	summaryLine := truncateStr(summary, dialogW-6)
-	b.WriteString(fmt.Sprintf("│ %-*s │\n", dialogW-4, summaryLine))
-	b.WriteString("│" + strings.Repeat("─", dialogW-2) + "│\n")
-	for i, opt := range opts {
-		cursor := "  "
-		if i == selected {
-			cursor = "▶ "
+// renderToolDetail renders tool detail with diff-style coloring.
+func renderToolDetail(toolLine, detail string) string {
+	if strings.Contains(toolLine, "Edit") || strings.Contains(toolLine, "edit") {
+		var out strings.Builder
+		for _, line := range strings.Split(detail, "\n") {
+			trimmed := strings.TrimLeft(line, " \t")
+			if strings.HasPrefix(trimmed, "+") {
+				out.WriteString(DiffAddedStyle.Render(line))
+			} else if strings.HasPrefix(trimmed, "-") {
+				out.WriteString(DiffRemovedStyle.Render(line))
+			} else if strings.HasPrefix(trimmed, "@@") {
+				out.WriteString(DiffHunkStyle.Render(line))
+			} else {
+				out.WriteString(MutedStyle(line))
+			}
+			out.WriteString("\n")
 		}
-		line := cursor + opt
-		b.WriteString(fmt.Sprintf("│ %-*s │\n", dialogW-4, line))
+		return strings.TrimRight(out.String(), "\n")
 	}
-	b.WriteString("└" + strings.Repeat("─", dialogW-2) + "┘")
-	return PermissionDialogStyle.Render(b.String())
+	return truncateStr(detail, 100)
 }
 
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "... (expand with Enter)"
+}
