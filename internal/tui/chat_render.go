@@ -48,8 +48,13 @@ func (m *ChatModel) View() string {
 
 	// Set viewport — preserve scroll position when user scrolled up,
 	// except after session restore which forces scroll to bottom.
+	content := b.String()
+	m.copyMode.SetContent(content)
+	if m.copyMode.IsActive() {
+		content = m.copyMode.Highlight(content)
+	}
 	atBottom := m.viewport.AtBottom() || m.forceScrollBottom
-	m.viewport.SetContent(b.String())
+	m.viewport.SetContent(content)
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
@@ -142,6 +147,7 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 		return msg.rendered
 	}
 
+	debugf("renderMessage: role=%s dirty=%v collapsed=%v wasFolded=%v contentLen=%d", msg.Role, msg.dirty, msg.Collapsed, msg.wasFolded, len(msg.Content))
 	contentW := max(m.viewport.Width-4, 20)
 	var result string
 	switch msg.Role {
@@ -158,19 +164,24 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 			src = msg.Detail
 		}
 		display, overflow, total := foldToolOutput(src, contentW, maxToolOutputLines)
-		if overflow && msg.rendered == "" {
+		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}
-		if msg.Collapsed && overflow {
-			remaining := total - maxToolOutputLines + 1
-			fold := lipgloss.NewStyle().Foreground(Accent).Render(
-				fmt.Sprintf("[+] %d more lines — click to expand", remaining),
-			)
-			result = AssistantToolStyle.Render(display) + "\n" + fold
-		} else if !msg.Collapsed && overflow {
-			collapse := lipgloss.NewStyle().Foreground(Accent).Render("[-] click to collapse")
-			result = AssistantToolStyle.Render(src) + "\n" + collapse
+		if overflow {
+			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
+			if msg.Collapsed {
+				remaining := total - maxToolOutputLines + 1
+				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
+					fmt.Sprintf("─── [+] %d more lines (click to expand) ───", remaining),
+				)
+				result = bar + " " + AssistantToolStyle.Render(display) + "\n" + header
+			} else {
+				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
+					"─── [-] click to collapse ───",
+				)
+				result = bar + " " + AssistantToolStyle.Render(src) + "\n" + header
+			}
 		} else {
 			s := AssistantToolStyle.Render(msg.Content)
 			if msg.Detail != "" && msg.Content != msg.Detail {
@@ -182,19 +193,24 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 	case "thinking":
 		thinkW := max(contentW-12, 20)
 		display, overflow, total := foldToolOutput(msg.Content, thinkW, maxThinkingLines)
-		if overflow && msg.rendered == "" {
+		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}
-		if msg.Collapsed && overflow {
-			remaining := total - maxThinkingLines + 1
-			fold := lipgloss.NewStyle().Foreground(Accent).Render(
-				fmt.Sprintf("[+] %d more lines — click to expand", remaining),
-			)
-			result = ThinkingStyle.Width(contentW).Render("[thinking] " + display) + "\n" + fold
-		} else if !msg.Collapsed && overflow {
-			collapse := lipgloss.NewStyle().Foreground(Accent).Render("[-] click to collapse")
-			result = ThinkingStyle.Width(contentW).Render("[thinking] " + msg.Content) + "\n" + collapse
+		if overflow {
+			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
+			if msg.Collapsed {
+				remaining := total - maxThinkingLines + 1
+				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
+					fmt.Sprintf("─── [+] %d more lines (click to expand) ───", remaining),
+				)
+				result = bar + " " + ThinkingStyle.Render("[thinking] " + display) + "\n" + header
+			} else {
+				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
+					"─── [-] click to collapse ───",
+				)
+				result = bar + " " + ThinkingStyle.Render("[thinking] " + msg.Content) + "\n" + header
+			}
 		} else {
 			result = ThinkingStyle.Width(contentW).Render("[thinking] " + msg.Content)
 		}

@@ -68,6 +68,13 @@ type ChatModel struct {
 	// This reduces viewport height. Modal overlays (detail) leave this at 0.
 	overlayHeight int
 
+	// mouseDisabled is true after a drag event disabled mouse tracking.
+	// syncMouse re-enables it and resets this flag.
+	mouseDisabled bool
+
+	// copyMode handles text selection and OSC 52 clipboard copy.
+	copyMode CopyMode
+
 	// Session persistence
 	sessionStore *session.Store
 	sessionID    string
@@ -108,6 +115,7 @@ func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store, 
 		engineDone:   engineDone,
 		sessionStore: store,
 	}
+	m.copyMode.viewport = &m.viewport
 
 	if resume && store != nil {
 		if sess, err := store.Latest(); err == nil && sess != nil {

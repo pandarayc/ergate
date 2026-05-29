@@ -159,7 +159,7 @@ func renderMessage(msg *ChatMessage, vpWidth int) string {
 		}
 		display, overflow, total := foldToolOutput(src, contentW, maxToolOutputLines)
 		// First render: detect overflow and mark collapsed.
-		if overflow && msg.rendered == "" {
+		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}
@@ -183,7 +183,7 @@ func renderMessage(msg *ChatMessage, vpWidth int) string {
 	case "thinking":
 		thinkW := max(contentW-12, 20) // "[thinking] " prefix
 		display, overflow, total := foldToolOutput(msg.Content, thinkW, maxThinkingLines)
-		if overflow && msg.rendered == "" {
+		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}

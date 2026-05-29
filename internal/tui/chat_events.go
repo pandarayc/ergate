@@ -202,9 +202,47 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 }
 
 func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel, tea.Cmd) {
-	debugf("Mouse: action=%v button=%v x=%d y=%d", msg.Action, msg.Button, msg.X, msg.Y)
-	// Click handling
+	debugf("Mouse: action=%v button=%v x=%d y=%d copyMode=%v", msg.Action, msg.Button, msg.X, msg.Y, m.copyMode.IsActive())
+
+	// Wheel scrolling.
+	if msg.Button == tea.MouseButtonWheelUp {
+		m.viewport.ScrollUp(3)
+		return m, nil
+	}
+	if msg.Button == tea.MouseButtonWheelDown {
+		m.viewport.ScrollDown(3)
+		return m, nil
+	}
+
+	// Left button press → enter copy mode.
+	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+		m.copyMode.Enter(msg.Y)
+		debugf("copyMode enter: mouseY=%d startY=%d", msg.Y, m.copyMode.startY)
+		return m, nil
+	}
+
+	// Motion during copy mode → track drag.
+	if msg.Action == tea.MouseActionMotion && m.copyMode.IsActive() {
+		m.copyMode.Track(msg.Y)
+		debugf("copyMode track: mouseY=%d endY=%d", msg.Y, m.copyMode.endY)
+		return m, nil
+	}
+
+	// Left button release: resolve drag vs click.
 	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
+		wasDrag := m.copyMode.startY != m.copyMode.endY
+		debugf("copyMode release: startY=%d endY=%d wasDrag=%v", m.copyMode.startY, m.copyMode.endY, wasDrag)
+		if wasDrag {
+			text := m.copyMode.Finish()
+			debugf("copyMode finish: textLen=%d", len(text))
+			if text != "" {
+				copyToClipboard(text)
+			}
+			return m, nil
+		}
+		m.copyMode.Cancel()
+
+		// Plain click — check viewport targets.
 		if m.handleToolBarClick(msg.Y) {
 			*cmds = append(*cmds, m.syncMouse())
 			return m, tea.Batch(*cmds...)
@@ -213,14 +251,9 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 			*cmds = append(*cmds, m.syncMouse())
 			return m, tea.Batch(*cmds...)
 		}
+		return m, nil
 	}
-	// Wheel scrolling
-	if msg.Button == tea.MouseButtonWheelUp {
-		m.viewport.ScrollUp(3)
-	}
-	if msg.Button == tea.MouseButtonWheelDown {
-		m.viewport.ScrollDown(3)
-	}
+
 	return m, nil
 }
 
@@ -432,30 +465,50 @@ func foldToolOutput(content string, width int, maxLines int) (display string, co
 	return display, true, totalLines
 }
 
-// handleViewportClick toggles message fold state.
+// handleViewportClick toggles the fold state of the message at mouseY.
+// mouseY is the terminal row (0-indexed), viewport starts at terminal row 0.
 func (m *ChatModel) handleViewportClick(mouseY int) bool {
-	vpStartY := 2
-	vpEndY := 2 + m.viewport.Height - 1
-	if mouseY < vpStartY || mouseY > vpEndY {
+	if mouseY < 0 || mouseY >= m.viewport.Height {
 		return false
 	}
-	// Expand last collapsed message
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Collapsed {
-			m.messages[i].Collapsed = false
-			m.messages[i].dirty = true
-			m.messages[i].rendered = ""
-			return true
-		}
+
+	// Map to content Y (accounting for viewport scroll offset).
+	contentY := mouseY + m.viewport.YOffset
+
+	const maxVisible = 50
+	start := 0
+	if len(m.messages) > maxVisible {
+		start = len(m.messages) - maxVisible
 	}
-	// Collapse last expanded folded message
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].wasFolded && !m.messages[i].Collapsed {
-			m.messages[i].Collapsed = true
-			m.messages[i].dirty = true
-			m.messages[i].rendered = ""
+
+	var prevRole string
+	y := 0 // accumulated Y position in content
+	for i := start; i < len(m.messages); i++ {
+		msg := &m.messages[i]
+
+		// Account for blank line separators between blocks.
+		if msg.Role == "user" && prevRole != "" && prevRole != "user" {
+			y++
+		}
+		if msg.Role == "assistant" && prevRole != "assistant" {
+			y++
+		}
+
+		rendered := m.renderMessage(msg)
+		h := strings.Count(rendered, "\n") + 2 // message + trailing \n from renderContent
+
+		if contentY >= y && contentY < y+h {
+			if !msg.wasFolded {
+				return false // not foldable
+			}
+			msg.Collapsed = !msg.Collapsed
+			msg.dirty = true
+			msg.rendered = ""
+			debugf("click toggle: msg[%d] role=%s collapsed=%v", i, msg.Role, msg.Collapsed)
 			return true
 		}
+		y += h
+		prevRole = msg.Role
 	}
 	return false
 }
@@ -465,7 +518,7 @@ func (m *ChatModel) handleToolBarClick(mouseY int) bool {
 	if len(m.toolsBar.Items) == 0 {
 		return false
 	}
-	tbStartY := 2 + m.viewport.Height
+	tbStartY := m.viewport.Height
 	tbHeight := m.toolsBar.Height()
 	tbEndY := tbStartY + tbHeight - 1
 
@@ -493,4 +546,10 @@ func (m *ChatModel) handleToolBarClick(mouseY int) bool {
 	return false
 }
 
-func (m *ChatModel) syncMouse() tea.Cmd { return nil }
+func (m *ChatModel) syncMouse() tea.Cmd {
+	if m.mouseDisabled {
+		m.mouseDisabled = false
+		return tea.EnableMouseCellMotion
+	}
+	return nil
+}
