@@ -94,9 +94,8 @@ func (cm *CopyMode) Highlight(content string) string {
 			b.WriteByte('\n')
 		}
 		if i >= top && i <= bottom {
-			// Inject background after every SGR reset so lipgloss can't clear it.
-			highlighted := selBg + strings.ReplaceAll(line, "\x1b[0m", "\x1b[0m"+selBg) + selReset
-			b.WriteString(highlighted)
+			b.WriteString(injectBg(line, selBg))
+			b.WriteString(selReset)
 		} else {
 			b.WriteString(line)
 		}

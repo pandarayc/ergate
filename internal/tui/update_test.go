@@ -1534,3 +1534,36 @@ func TestKeyEnter_SendsWithNewlines(t *testing.T) {
 		t.Error("textarea should be reset after send")
 	}
 }
+
+func TestInjectBg(t *testing.T) {
+	bgCode := "\x1b[48;5;236m"
+
+	// Plain text — bg injected at start
+	got := injectBg("hello", bgCode)
+	if !strings.HasPrefix(got, bgCode) {
+		t.Errorf("expected prefix %q, got %q", bgCode, got[:20])
+	}
+	if !strings.Contains(got, "hello") {
+		t.Error("lost text")
+	}
+
+	// Text with reset — bg re-injected after reset
+	input := "\x1b[38;5;123mfoo\x1b[0mbar"
+	got = injectBg(input, bgCode)
+	if !strings.Contains(got, "\x1b[0m"+bgCode) {
+		t.Error("bg not re-injected after reset")
+	}
+	if !strings.Contains(got, "foo") || !strings.Contains(got, "bar") {
+		t.Error("lost text")
+	}
+
+	// Chinese text with lipgloss styling
+	input = "\x1b[38;5;123m你好\x1b[0m世界"
+	got = injectBg(input, bgCode)
+	if !strings.Contains(got, "你好") || !strings.Contains(got, "世界") {
+		t.Error("lost Chinese text")
+	}
+	if !strings.Contains(got, "\x1b[0m"+bgCode) {
+		t.Error("bg not re-injected for Chinese text")
+	}
+}
