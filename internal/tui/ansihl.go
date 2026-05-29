@@ -1,6 +1,46 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+)
+
+// stripAnsi removes all ANSI escape sequences from a string, returning plain text.
+func stripAnsi(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			// Skip to the end of the SGR/CSI sequence (terminated by a letter)
+			j := i + 2
+			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+				j++
+			}
+			if j < len(s) {
+				j++ // skip the terminating letter
+			}
+			i = j
+		} else if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == ']' {
+			// OSC sequence: skip to ST (\x1b\\) or BEL (\x07)
+			j := i + 2
+			for j < len(s) && s[j] != '\x07' {
+				if s[j] == '\x1b' && j+1 < len(s) && s[j+1] == '\\' {
+					j += 2
+					break
+				}
+				j++
+			}
+			if j < len(s) && s[j] == '\x07' {
+				j++
+			}
+			i = j
+		} else {
+			b.WriteByte(s[i])
+			i++
+		}
+	}
+	return b.String()
+}
 
 // injectBg ensures a background color stays active for the entire line,
 // re-injecting it after every SGR reset sequence. This handles the case

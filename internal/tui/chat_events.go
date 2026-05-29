@@ -216,21 +216,21 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 
 	// Left button press → enter copy mode.
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-		m.copyMode.Enter(msg.Y)
-		debugf("copyMode enter: mouseY=%d startY=%d", msg.Y, m.copyMode.startY)
+		m.copyMode.Enter(msg.X, msg.Y)
+		debugf("copyMode enter: x=%d y=%d startY=%d", msg.X, msg.Y, m.copyMode.startY)
 		return m, nil
 	}
 
 	// Motion during copy mode → track drag.
 	if msg.Action == tea.MouseActionMotion && m.copyMode.IsActive() {
-		m.copyMode.Track(msg.Y)
-		debugf("copyMode track: mouseY=%d endY=%d", msg.Y, m.copyMode.endY)
+		m.copyMode.Track(msg.X, msg.Y)
+		debugf("copyMode track: x=%d y=%d endY=%d", msg.X, msg.Y, m.copyMode.endY)
 		return m, nil
 	}
 
 	// Left button release: resolve drag vs click.
 	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
-		wasDrag := m.copyMode.startY != m.copyMode.endY
+		wasDrag := m.copyMode.startY != m.copyMode.endY || m.copyMode.startX != m.copyMode.endX
 		debugf("copyMode release: startY=%d endY=%d wasDrag=%v", m.copyMode.startY, m.copyMode.endY, wasDrag)
 		if wasDrag {
 			text := m.copyMode.Finish()

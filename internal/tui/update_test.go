@@ -1567,3 +1567,23 @@ func TestInjectBg(t *testing.T) {
 		t.Error("bg not re-injected for Chinese text")
 	}
 }
+
+func TestStripAnsi(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"plain text", "plain text"},
+		{"\x1b[31mred\x1b[0m", "red"},
+		{"\x1b[38;5;123m你好\x1b[0m世界", "你好世界"},
+		{"\x1b[1;38;5;141m⚙ read\x1b[0m", "⚙ read"},
+		{"no\x1b[mansi", "noansi"},
+		{"\x1b]52;c;dGVzdA==\x07text", "text"},
+	}
+	for _, tt := range tests {
+		got := stripAnsi(tt.input)
+		if got != tt.want {
+			t.Errorf("stripAnsi(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

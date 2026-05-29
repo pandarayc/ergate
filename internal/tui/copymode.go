@@ -9,26 +9,29 @@ import (
 // CopyMode handles text selection and clipboard copy within the viewport.
 type CopyMode struct {
 	active     bool
-	startY     int // viewport content Y coordinate
+	startX     int // viewport content X coordinate (column)
+	startY     int // viewport content Y coordinate (line)
+	endX       int
 	endY       int
 	viewport   *viewport.Model
 	rawContent string
 }
 
 // Enter starts copy mode at the given mouse position.
-// mouseY is the terminal row (0-indexed), maps directly to viewport content line
-// when accounting for scroll offset. The viewport content includes the header.
-func (cm *CopyMode) Enter(mouseY int) {
+func (cm *CopyMode) Enter(mouseX, mouseY int) {
 	cm.active = true
+	cm.startX = mouseX
 	cm.startY = mouseY + cm.viewport.YOffset
+	cm.endX = mouseX
 	cm.endY = cm.startY
 }
 
 // Track updates the selection end point during drag.
-func (cm *CopyMode) Track(mouseY int) {
+func (cm *CopyMode) Track(mouseX, mouseY int) {
 	if !cm.active {
 		return
 	}
+	cm.endX = mouseX
 	cm.endY = mouseY + cm.viewport.YOffset
 }
 
@@ -36,8 +39,8 @@ func (cm *CopyMode) Track(mouseY int) {
 func (cm *CopyMode) Finish() string {
 	cm.active = false
 	text := cm.extractText()
-	cm.startY = 0
-	cm.endY = 0
+	cm.startX, cm.startY = 0, 0
+	cm.endX, cm.endY = 0, 0
 	cm.rawContent = ""
 	return text
 }
@@ -45,8 +48,8 @@ func (cm *CopyMode) Finish() string {
 // Cancel aborts copy mode without copying.
 func (cm *CopyMode) Cancel() {
 	cm.active = false
-	cm.startY = 0
-	cm.endY = 0
+	cm.startX, cm.startY = 0, 0
+	cm.endX, cm.endY = 0, 0
 	cm.rawContent = ""
 }
 
@@ -103,7 +106,7 @@ func (cm *CopyMode) Highlight(content string) string {
 	return b.String()
 }
 
-// extractText returns the plain text of the selected region.
+// extractText returns the plain text of the selected region with ANSI codes stripped.
 func (cm *CopyMode) extractText() string {
 	top, bottom := cm.selectedRange()
 	if top == bottom {
@@ -121,5 +124,37 @@ func (cm *CopyMode) extractText() string {
 		return ""
 	}
 
-	return strings.Join(lines[top:bottom+1], "\n")
+	// Determine X bounds (normalize for start > end direction).
+	startX, endX := cm.startX, cm.endX
+	startY, endY := cm.startY, cm.endY
+	if startY > endY || (startY == endY && startX > endX) {
+		startX, endX = endX, startX
+		startY, endY = endY, startY
+	}
+
+	var result []string
+	for i := top; i <= bottom; i++ {
+		plain := stripAnsi(lines[i])
+		runes := []rune(plain)
+		if i == top && i == bottom {
+			// Single line selection: clip to [startX, endX]
+			lo := min(startX, len(runes))
+			hi := min(endX+1, len(runes))
+			if lo < hi {
+				result = append(result, string(runes[lo:hi]))
+			}
+		} else if i == top {
+			// First line: from startX to end
+			lo := min(startX, len(runes))
+			result = append(result, string(runes[lo:]))
+		} else if i == bottom {
+			// Last line: from start to endX
+			hi := min(endX+1, len(runes))
+			result = append(result, string(runes[:hi]))
+		} else {
+			// Middle lines: full line
+			result = append(result, plain)
+		}
+	}
+	return strings.Join(result, "\n")
 }
