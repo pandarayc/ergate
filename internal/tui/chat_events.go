@@ -90,7 +90,24 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+	case tea.KeyCtrlC:
+		if m.running {
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.running = false
+			m.messages = append(m.messages, ChatMessage{Role: "system", Content: "[Interrupted]"})
+			return true, nil
+		}
+		// Clear input text first; quit only when already empty.
+		if strings.TrimSpace(m.input.Value()) != "" {
+			m.input.Reset()
+			return true, nil
+		}
+		m.saveSession()
+		return true, tea.Quit
+
+	case tea.KeyEsc:
 		if m.running {
 			if m.cancel != nil {
 				m.cancel()
@@ -230,7 +247,16 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 
 	// Left button release: resolve drag vs click.
 	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
-		wasDrag := m.copyMode.startY != m.copyMode.endY || m.copyMode.startX != m.copyMode.endX
+		// Require minimum drag distance to distinguish click from micro-tremor.
+		dx := m.copyMode.endX - m.copyMode.startX
+		dy := m.copyMode.endY - m.copyMode.startY
+		if dx < 0 {
+			dx = -dx
+		}
+		if dy < 0 {
+			dy = -dy
+		}
+		wasDrag := dy > 0 || dx > 2
 		debugf("copyMode release: startY=%d endY=%d wasDrag=%v", m.copyMode.startY, m.copyMode.endY, wasDrag)
 		if wasDrag {
 			text := m.copyMode.Finish()

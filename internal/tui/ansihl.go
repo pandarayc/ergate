@@ -42,6 +42,75 @@ func stripAnsi(s string) string {
 	return b.String()
 }
 
+// injectBgRange applies a background color to columns [startCol, endCol] of an
+// ANSI-styled line. Columns are 0-indexed visible characters (ANSI codes skipped).
+// -1 for startCol means 0, -1 for endCol means end of line.
+func injectBgRange(line string, bgCode string, startCol, endCol int) string {
+	if line == "" || bgCode == "" {
+		return line
+	}
+	const bgReset = "\x1b[49m"
+
+	var b strings.Builder
+	b.Grow(len(line) + len(bgCode)*4)
+	col := 0     // visible column counter
+	inSel := false
+
+	i := 0
+	for i < len(line) {
+		// ANSI escape sequence — pass through
+		if line[i] == '\x1b' && i+1 < len(line) && line[i+1] == '[' {
+			j := i + 2
+			for j < len(line) && line[j] != 'm' {
+				j++
+			}
+			if j < len(line) && line[j] == 'm' {
+				seq := line[i : j+1]
+				b.WriteString(seq)
+				// Re-inject bg after any reset if we're in selection
+				if inSel && resetsBg(seq) {
+					b.WriteString(bgCode)
+				}
+				i = j + 1
+				continue
+			}
+		}
+		// Visible character
+		if col == startCol && !inSel {
+			b.WriteString(bgCode)
+			inSel = true
+		}
+		b.WriteByte(line[i])
+		// Handle multi-byte UTF-8
+		if line[i] >= 0x80 {
+			// Walk the full UTF-8 sequence
+			size := 1
+			if line[i]&0xE0 == 0xC0 {
+				size = 2
+			} else if line[i]&0xF0 == 0xE0 {
+				size = 3
+			} else if line[i]&0xF8 == 0xF0 {
+				size = 4
+			}
+			for k := 1; k < size && i+k < len(line); k++ {
+				b.WriteByte(line[i+k])
+			}
+			i += size
+		} else {
+			i++
+		}
+		col++
+		if endCol >= 0 && col > endCol && inSel {
+			b.WriteString(bgReset)
+			inSel = false
+		}
+	}
+	if inSel {
+		b.WriteString(bgReset)
+	}
+	return b.String()
+}
+
 // injectBg ensures a background color stays active for the entire line,
 // re-injecting it after every SGR reset sequence. This handles the case
 // where lipgloss outputs \x1b[0m between styled segments, which would

@@ -70,13 +70,23 @@ func (cm *CopyMode) SetContent(content string) {
 }
 
 // Highlight wraps the viewport content with selection highlighting.
-// Selected lines get a dark background color.
+// Selected cells get a dark background color with character-level precision.
 func (cm *CopyMode) Highlight(content string) string {
-	if !cm.active || cm.startY == cm.endY {
+	if !cm.active {
 		return content
 	}
 
 	top, bottom := cm.selectedRange()
+	// Normalize X bounds.
+	startX, endX := cm.startX, cm.endX
+	startY, endY := cm.startY, cm.endY
+	if startY > endY || (startY == endY && startX > endX) {
+		startX, endX = endX, startX
+		startY, endY = endY, startY
+	}
+	_ = startY
+	_ = endY
+
 	lines := strings.Split(content, "\n")
 	if top < 0 {
 		top = 0
@@ -88,19 +98,28 @@ func (cm *CopyMode) Highlight(content string) string {
 		return content
 	}
 
-	const selBg = "\x1b[48;5;236m" // dark gray background
-	const selReset = "\x1b[49m"    // reset background only
+	const selBg = "\x1b[48;5;236m"
 
 	var b strings.Builder
 	for i, line := range lines {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		if i >= top && i <= bottom {
-			b.WriteString(injectBg(line, selBg))
-			b.WriteString(selReset)
-		} else {
+		if i < top || i > bottom {
 			b.WriteString(line)
+		} else if top == bottom {
+			// Single line: highlight [startX, endX]
+			b.WriteString(injectBgRange(line, selBg, startX, endX))
+		} else if i == top {
+			// First line: from startX to end of line
+			b.WriteString(injectBgRange(line, selBg, startX, -1))
+		} else if i == bottom {
+			// Last line: from start to endX
+			b.WriteString(injectBgRange(line, selBg, 0, endX))
+		} else {
+			// Middle lines: full line
+			b.WriteString(injectBg(line, selBg))
+			b.WriteString("\x1b[49m")
 		}
 	}
 	return b.String()
