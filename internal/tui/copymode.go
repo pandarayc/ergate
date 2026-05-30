@@ -154,24 +154,13 @@ func (cm *CopyMode) extractText() string {
 	var result []string
 	for i := top; i <= bottom; i++ {
 		plain := stripAnsi(lines[i])
-		runes := []rune(plain)
 		if i == top && i == bottom {
-			// Single line selection: clip to [startX, endX]
-			lo := min(startX, len(runes))
-			hi := min(endX+1, len(runes))
-			if lo < hi {
-				result = append(result, string(runes[lo:hi]))
-			}
+			result = append(result, sliceByCol(plain, startX, endX+1))
 		} else if i == top {
-			// First line: from startX to end
-			lo := min(startX, len(runes))
-			result = append(result, string(runes[lo:]))
+			result = append(result, sliceByCol(plain, startX, -1))
 		} else if i == bottom {
-			// Last line: from start to endX
-			hi := min(endX+1, len(runes))
-			result = append(result, string(runes[:hi]))
+			result = append(result, sliceByCol(plain, 0, endX+1))
 		} else {
-			// Middle lines: full line
 			result = append(result, plain)
 		}
 	}

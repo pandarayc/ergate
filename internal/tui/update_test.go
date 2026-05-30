@@ -1587,3 +1587,31 @@ func TestStripAnsi(t *testing.T) {
 		}
 	}
 }
+
+func TestSliceByCol_CJK(t *testing.T) {
+	// "你好世界" — each Chinese char = 2 columns = 8 total columns
+	s := "你好世界"
+	// Columns: 你[0-1] 好[2-3] 世[4-5] 界[6-7]
+
+	got := sliceByCol(s, 0, 4) // "你好"
+	if got != "你好" {
+		t.Errorf("cols [0,4) = %q, want %q", got, "你好")
+	}
+
+	got = sliceByCol(s, 2, 6) // "好世"
+	if got != "好世" {
+		t.Errorf("cols [2,6) = %q, want %q", got, "好世")
+	}
+
+	got = sliceByCol(s, 4, -1) // "世界"
+	if got != "世界" {
+		t.Errorf("cols [4,end) = %q, want %q", got, "世界")
+	}
+
+	// Mixed: "ab你cd" — a[0] b[1] 你[2-3] c[4] d[5]
+	s = "ab你cd"
+	got = sliceByCol(s, 1, 4) // "b你"
+	if got != "b你" {
+		t.Errorf("cols [1,4) = %q, want %q", got, "b你")
+	}
+}
