@@ -7,23 +7,38 @@ import (
 )
 
 // CopyMode handles text selection and clipboard copy within the viewport.
+// Uses an anchor/focus model (like DOM Selection) normalized to start/end for display.
+//
+// States:
+//  0. No selection   (active=false, settled=false)
+//  1. Anchor only    (active=true, focusX=-1) — press without drag yet
+//  2. Active drag    (active=true, focusX>=0) — dragging, highlight visible
+//  3. Settled        (active=false, settled=true) — drag finished, highlight stays
+//  4. Cleared        → Cancel() or next press
+//
+// Coordinates are in the pre-wrapped visual content space: each wrappedLines entry
+// is one viewport row, so viewport.YOffset maps 1:1 to wrappedLines indices.
 type CopyMode struct {
-	active     bool
-	startX     int // viewport content X coordinate (column)
-	startY     int // viewport content Y coordinate (line)
-	endX       int
-	endY       int
-	viewport   *viewport.Model
-	rawContent string
+	active  bool
+	settled bool
+	anchorX int // press position (content columns, 0-indexed)
+	anchorY int // press position (content rows, 0-indexed)
+	focusX  int // drag position; -1 means not yet dragged
+	focusY  int
+
+	viewport     *viewport.Model
+	wrappedLines []string // pre-wrapped content: 1 entry = 1 visual row
+	contentLines int      // line count at last SetContent; used to detect streaming changes
 }
 
 // Enter starts copy mode at the given mouse position.
 func (cm *CopyMode) Enter(mouseX, mouseY int) {
 	cm.active = true
-	cm.startX = mouseX
-	cm.startY = mouseY + cm.viewport.YOffset
-	cm.endX = mouseX
-	cm.endY = cm.startY
+	cm.settled = false
+	cm.anchorX = mouseX
+	cm.anchorY = mouseY + cm.viewport.YOffset
+	cm.focusX = -1
+	cm.focusY = -1
 }
 
 // Track updates the selection end point during drag.
@@ -31,88 +46,100 @@ func (cm *CopyMode) Track(mouseX, mouseY int) {
 	if !cm.active {
 		return
 	}
-	cm.endX = mouseX
-	cm.endY = mouseY + cm.viewport.YOffset
+	cm.focusX = mouseX
+	cm.focusY = mouseY + cm.viewport.YOffset
 }
 
-// Finish ends copy mode, extracts selected text, and returns it.
+// Finish ends the drag, copies text, and transitions to settled state.
+// Returns the selected text for clipboard copy. Returns "" for click-without-drag.
 func (cm *CopyMode) Finish() string {
 	cm.active = false
-	text := cm.extractText()
-	cm.startX, cm.startY = 0, 0
-	cm.endX, cm.endY = 0, 0
-	cm.rawContent = ""
-	return text
+	if cm.focusX < 0 {
+		// Click without drag — no selection.
+		cm.anchorX, cm.anchorY = 0, 0
+		cm.wrappedLines = nil
+		return ""
+	}
+	// Keep highlight visible (settled state) like iTerm2/claude.
+	cm.settled = true
+	return cm.extractText()
 }
 
-// Cancel aborts copy mode without copying.
+// Cancel aborts copy mode and clears any settled highlight.
 func (cm *CopyMode) Cancel() {
 	cm.active = false
-	cm.startX, cm.startY = 0, 0
-	cm.endX, cm.endY = 0, 0
-	cm.rawContent = ""
+	cm.settled = false
+	cm.anchorX, cm.anchorY = 0, 0
+	cm.focusX, cm.focusY = -1, -1
+	cm.wrappedLines = nil
+	cm.contentLines = 0
 }
 
-// IsActive returns true if copy mode is currently active.
-func (cm *CopyMode) IsActive() bool { return cm.active }
+// IsActive returns true if copy mode is active (dragging or settled).
+func (cm *CopyMode) IsActive() bool { return cm.active || cm.settled }
 
-// selectedRange returns the normalized (top, bottom) lines.
-func (cm *CopyMode) selectedRange() (int, int) {
-	if cm.startY < cm.endY {
-		return cm.startY, cm.endY
+// HasSelection returns true when there is a non-degenerate selection to display.
+func (cm *CopyMode) HasSelection() bool {
+	return (cm.active || cm.settled) && cm.focusX >= 0
+}
+
+// selectedRange returns normalized selection bounds in reading order.
+// start ≤ end (top-to-bottom, then left-to-right within same row).
+func (cm *CopyMode) selectedRange() (sx, sy, ex, ey int) {
+	ax, ay := cm.anchorX, cm.anchorY
+	fx, fy := cm.focusX, cm.focusY
+	if ay < fy || (ay == fy && ax <= fx) {
+		return ax, ay, fx, fy
 	}
-	return cm.endY, cm.startY
+	return fx, fy, ax, ay
 }
 
-// SetContent stores the current viewport content for text extraction.
+// SetContent stores the pre-wrapped content lines for text extraction.
+// If content changed while a settled selection is active (e.g. streaming tokens),
+// the selection is cancelled to prevent stale coordinates highlighting wrong text.
 func (cm *CopyMode) SetContent(content string) {
-	cm.rawContent = content
+	cm.wrappedLines = strings.Split(content, "\n")
+	if cm.settled && len(cm.wrappedLines) != cm.contentLines {
+		cm.Cancel()
+		return
+	}
+	cm.contentLines = len(cm.wrappedLines)
 }
 
-// Highlight wraps the viewport content with selection highlighting.
-// Selected cells get a dark background color with character-level precision.
+// Highlight applies selection background to the pre-wrapped content.
 func (cm *CopyMode) Highlight(content string) string {
-	if !cm.active {
+	if !cm.HasSelection() {
 		return content
 	}
 
-	top, bottom := cm.selectedRange()
-	// Normalize X bounds.
-	startX, endX := cm.startX, cm.endX
-	startY, endY := cm.startY, cm.endY
-	if startY > endY || (startY == endY && startX > endX) {
-		startX, endX = endX, startX
-		startY, endY = endY, startY
-	}
-	_ = startY
-	_ = endY
-
+	sx, sy, ex, ey := cm.selectedRange()
 	lines := strings.Split(content, "\n")
-	if top < 0 {
-		top = 0
+
+	if sy < 0 {
+		sy = 0
 	}
-	if bottom >= len(lines) {
-		bottom = len(lines) - 1
+	if ey >= len(lines) {
+		ey = len(lines) - 1
 	}
-	if top > bottom {
+	if sy > ey {
 		return content
 	}
 
-	const selBg = "\x1b[48;5;24m" // dark blue, visible on dark backgrounds
+	const selBg = "\x1b[48;5;24m" // dark blue
 
 	var b strings.Builder
 	for i, line := range lines {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		if i < top || i > bottom {
+		if i < sy || i > ey {
 			b.WriteString(line)
-		} else if top == bottom {
-			b.WriteString(injectBgRange(line, selBg, startX, endX))
-		} else if i == top {
-			b.WriteString(injectBgRange(line, selBg, startX, -1))
-		} else if i == bottom {
-			b.WriteString(injectBgRange(line, selBg, 0, endX))
+		} else if sy == ey {
+			b.WriteString(injectBgRange(line, selBg, sx, ex))
+		} else if i == sy {
+			b.WriteString(injectBgRange(line, selBg, sx, -1))
+		} else if i == ey {
+			b.WriteString(injectBgRange(line, selBg, 0, ex))
 		} else {
 			b.WriteString(injectBgRange(line, selBg, 0, -1))
 		}
@@ -120,41 +147,29 @@ func (cm *CopyMode) Highlight(content string) string {
 	return b.String()
 }
 
-// extractText returns the plain text of the selected region with ANSI codes stripped.
+// extractText extracts plain text from the selected region.
 func (cm *CopyMode) extractText() string {
-	top, bottom := cm.selectedRange()
-	if top == bottom {
+	sx, sy, ex, ey := cm.selectedRange()
+
+	if sy >= len(cm.wrappedLines) {
 		return ""
 	}
-
-	lines := strings.Split(cm.rawContent, "\n")
-	if top < 0 {
-		top = 0
+	if ey >= len(cm.wrappedLines) {
+		ey = len(cm.wrappedLines) - 1
 	}
-	if bottom >= len(lines) {
-		bottom = len(lines) - 1
-	}
-	if top > bottom {
+	if sy > ey {
 		return ""
-	}
-
-	// Determine X bounds (normalize for start > end direction).
-	startX, endX := cm.startX, cm.endX
-	startY, endY := cm.startY, cm.endY
-	if startY > endY || (startY == endY && startX > endX) {
-		startX, endX = endX, startX
-		startY, endY = endY, startY
 	}
 
 	var result []string
-	for i := top; i <= bottom; i++ {
-		plain := stripAnsi(lines[i])
-		if i == top && i == bottom {
-			result = append(result, sliceByCol(plain, startX, endX+1))
-		} else if i == top {
-			result = append(result, sliceByCol(plain, startX, -1))
-		} else if i == bottom {
-			result = append(result, sliceByCol(plain, 0, endX+1))
+	for i := sy; i <= ey; i++ {
+		plain := stripAnsi(cm.wrappedLines[i])
+		if sy == ey {
+			result = append(result, sliceByCol(plain, sx, ex+1))
+		} else if i == sy {
+			result = append(result, sliceByCol(plain, sx, -1))
+		} else if i == ey {
+			result = append(result, sliceByCol(plain, 0, ex+1))
 		} else {
 			result = append(result, plain)
 		}

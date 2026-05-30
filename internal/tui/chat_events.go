@@ -91,6 +91,11 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
+		// Settled selection: clear highlight, don't quit.
+		if m.copyMode.IsActive() {
+			m.copyMode.Cancel()
+			return true, nil
+		}
 		if m.running {
 			if m.cancel != nil {
 				m.cancel()
@@ -108,6 +113,11 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 		return true, tea.Quit
 
 	case tea.KeyEsc:
+		// Settled selection: clear highlight, don't quit.
+		if m.copyMode.IsActive() {
+			m.copyMode.Cancel()
+			return true, nil
+		}
 		if m.running {
 			if m.cancel != nil {
 				m.cancel()
@@ -234,30 +244,32 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 	// Left button press → enter copy mode.
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 		m.copyMode.Enter(msg.X, msg.Y)
-		debugf("copyMode enter: x=%d y=%d startY=%d", msg.X, msg.Y, m.copyMode.startY)
+		debugf("copyMode enter: x=%d y=%d anchorY=%d", msg.X, msg.Y, m.copyMode.anchorY)
 		return m, nil
 	}
 
 	// Motion during copy mode → track drag.
 	if msg.Action == tea.MouseActionMotion && m.copyMode.IsActive() {
 		m.copyMode.Track(msg.X, msg.Y)
-		debugf("copyMode track: x=%d y=%d endY=%d", msg.X, msg.Y, m.copyMode.endY)
+		debugf("copyMode track: x=%d y=%d focusY=%d", msg.X, msg.Y, m.copyMode.focusY)
 		return m, nil
 	}
 
 	// Left button release: resolve drag vs click.
 	if msg.Action == tea.MouseActionRelease && msg.Button == tea.MouseButtonLeft {
-		// Require minimum drag distance to distinguish click from micro-tremor.
-		dx := m.copyMode.endX - m.copyMode.startX
-		dy := m.copyMode.endY - m.copyMode.startY
-		if dx < 0 {
-			dx = -dx
+		wasDrag := m.copyMode.focusX >= 0
+		if wasDrag {
+			dx := m.copyMode.focusX - m.copyMode.anchorX
+			dy := m.copyMode.focusY - m.copyMode.anchorY
+			if dx < 0 {
+				dx = -dx
+			}
+			if dy < 0 {
+				dy = -dy
+			}
+			wasDrag = dy > 0 || dx > 1
 		}
-		if dy < 0 {
-			dy = -dy
-		}
-		wasDrag := dy > 0 || dx > 1
-		debugf("copyMode release: startY=%d endY=%d wasDrag=%v", m.copyMode.startY, m.copyMode.endY, wasDrag)
+		debugf("copyMode release: anchorY=%d focusY=%d wasDrag=%v", m.copyMode.anchorY, m.copyMode.focusY, wasDrag)
 		if wasDrag {
 			text := m.copyMode.Finish()
 			debugf("copyMode finish: textLen=%d", len(text))

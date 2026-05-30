@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/raydraw/ergate/internal/util"
 )
 
@@ -49,12 +50,13 @@ func (m *ChatModel) View() string {
 	// Set viewport — preserve scroll position when user scrolled up,
 	// except after session restore which forces scroll to bottom.
 	content := b.String()
-	m.copyMode.SetContent(content)
+	wrapped := prewrapContent(content, m.viewport.Width)
+	m.copyMode.SetContent(wrapped)
 	if m.copyMode.IsActive() {
-		content = m.copyMode.Highlight(content)
+		wrapped = m.copyMode.Highlight(wrapped)
 	}
 	atBottom := m.viewport.AtBottom() || m.forceScrollBottom
-	m.viewport.SetContent(content)
+	m.viewport.SetContent(wrapped)
 	if atBottom {
 		m.viewport.GotoBottom()
 	}
@@ -254,4 +256,20 @@ func truncateStr(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "... (expand with Enter)"
+}
+
+// prewrapContent wraps each logical line to the given width using ANSI-aware
+// word wrapping. This ensures viewport visual rows map 1:1 to \n-delimited
+// lines, which fixes coordinate mapping for copy mode selection.
+func prewrapContent(content string, width int) string {
+	if width <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = ansi.Wordwrap(line, width, " ")
+		}
+	}
+	return strings.Join(lines, "\n")
 }
