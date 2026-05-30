@@ -98,7 +98,7 @@ func (cm *CopyMode) Highlight(content string) string {
 		return content
 	}
 
-	const selBg = "\x1b[48;5;236m"
+	const selBg = "\x1b[48;5;24m" // dark blue, visible on dark backgrounds
 
 	var b strings.Builder
 	for i, line := range lines {
@@ -108,18 +108,13 @@ func (cm *CopyMode) Highlight(content string) string {
 		if i < top || i > bottom {
 			b.WriteString(line)
 		} else if top == bottom {
-			// Single line: highlight [startX, endX]
 			b.WriteString(injectBgRange(line, selBg, startX, endX))
 		} else if i == top {
-			// First line: from startX to end of line
 			b.WriteString(injectBgRange(line, selBg, startX, -1))
 		} else if i == bottom {
-			// Last line: from start to endX
 			b.WriteString(injectBgRange(line, selBg, 0, endX))
 		} else {
-			// Middle lines: full line
-			b.WriteString(injectBg(line, selBg))
-			b.WriteString("\x1b[49m")
+			b.WriteString(injectBgRange(line, selBg, 0, -1))
 		}
 	}
 	return b.String()
