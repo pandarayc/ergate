@@ -533,7 +533,7 @@ func (m *ChatModel) handleViewportClick(mouseY int) bool {
 		}
 
 		rendered := m.renderMessage(msg)
-		h := strings.Count(rendered, "\n") + 2 // message + trailing \n from renderContent
+		h := visualLineCount(rendered, m.viewport.Width) + 1 // rendered + trailing \n from renderContent
 
 		if contentY >= y && contentY < y+h {
 			if !msg.wasFolded {

@@ -200,12 +200,14 @@ func convertMessages(msgs []llm.Message) []ChatMessage {
 }
 
 // visualLineCount returns the number of visual lines when text is rendered at
-// the given width, accounting for both newline breaks and line wrapping.
+// the given width, accounting for both newline breaks, line wrapping, and
+// ANSI escape sequences (which don't occupy visible columns).
 func visualLineCount(text string, width int) int {
 	width = max(width, 20)
 	count := 0
 	for _, line := range strings.Split(text, "\n") {
-		runes := []rune(line)
+		plain := stripAnsi(line)
+		runes := []rune(plain)
 		if len(runes) == 0 {
 			count++
 		} else {
