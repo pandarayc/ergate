@@ -256,7 +256,7 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 		if dy < 0 {
 			dy = -dy
 		}
-		wasDrag := dy > 0 || dx > 2
+		wasDrag := dy > 0 || dx > 1
 		debugf("copyMode release: startY=%d endY=%d wasDrag=%v", m.copyMode.startY, m.copyMode.endY, wasDrag)
 		if wasDrag {
 			text := m.copyMode.Finish()
