@@ -1,10 +1,6 @@
 package tui
 
-import (
-	"strings"
-
-	"github.com/charmbracelet/bubbles/viewport"
-)
+import "strings"
 
 // CopyMode handles text selection and clipboard copy within the viewport.
 // Uses an anchor/focus model (like DOM Selection) normalized to start/end for display.
@@ -17,7 +13,7 @@ import (
 //  4. Cleared        → Cancel() or next press
 //
 // Coordinates are in the pre-wrapped visual content space: each wrappedLines entry
-// is one viewport row, so viewport.YOffset maps 1:1 to wrappedLines indices.
+// is one viewport row, so YOffset maps 1:1 to wrappedLines indices.
 type CopyMode struct {
 	active  bool
 	settled bool
@@ -26,28 +22,28 @@ type CopyMode struct {
 	focusX  int // drag position; -1 means not yet dragged
 	focusY  int
 
-	viewport     *viewport.Model
 	wrappedLines []string // pre-wrapped content: 1 entry = 1 visual row
 	contentLines int      // line count at last SetContent; used to detect streaming changes
 }
 
 // Enter starts copy mode at the given mouse position.
-func (cm *CopyMode) Enter(mouseX, mouseY int) {
+// yOffset is the viewport's current vertical scroll offset.
+func (cm *CopyMode) Enter(mouseX, mouseY, yOffset int) {
 	cm.active = true
 	cm.settled = false
 	cm.anchorX = mouseX
-	cm.anchorY = mouseY + cm.viewport.YOffset
+	cm.anchorY = mouseY + yOffset
 	cm.focusX = -1
 	cm.focusY = -1
 }
 
 // Track updates the selection end point during drag.
-func (cm *CopyMode) Track(mouseX, mouseY int) {
+func (cm *CopyMode) Track(mouseX, mouseY, yOffset int) {
 	if !cm.active {
 		return
 	}
 	cm.focusX = mouseX
-	cm.focusY = mouseY + cm.viewport.YOffset
+	cm.focusY = mouseY + yOffset
 }
 
 // Finish ends the drag, copies text, and transitions to settled state.

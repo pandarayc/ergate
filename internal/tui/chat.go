@@ -115,8 +115,6 @@ func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store, 
 		engineDone:   engineDone,
 		sessionStore: store,
 	}
-	m.copyMode.viewport = &m.viewport
-
 	if resume && store != nil {
 		if sess, err := store.Latest(); err == nil && sess != nil {
 			eng.ImportSession(engine.SessionData{

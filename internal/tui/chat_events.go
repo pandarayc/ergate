@@ -243,14 +243,14 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 
 	// Left button press → enter copy mode.
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-		m.copyMode.Enter(msg.X, msg.Y)
+		m.copyMode.Enter(msg.X, msg.Y, m.viewport.YOffset)
 		debugf("copyMode enter: x=%d y=%d anchorY=%d", msg.X, msg.Y, m.copyMode.anchorY)
 		return m, nil
 	}
 
 	// Motion during copy mode → track drag.
 	if msg.Action == tea.MouseActionMotion && m.copyMode.IsActive() {
-		m.copyMode.Track(msg.X, msg.Y)
+		m.copyMode.Track(msg.X, msg.Y, m.viewport.YOffset)
 		debugf("copyMode track: x=%d y=%d focusY=%d", msg.X, msg.Y, m.copyMode.focusY)
 		return m, nil
 	}
