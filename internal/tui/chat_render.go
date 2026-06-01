@@ -177,6 +177,7 @@ func (m *ChatModel) renderContent() string {
 				Y:      headerLines + y,
 				Height: vis + 1,
 				Index:  i,
+				Label:  msg.Content,
 			})
 		}
 		y += vis + 1
@@ -208,22 +209,23 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 		if msg.Detail != "" && msg.Content != msg.Detail {
 			src = msg.Detail
 		}
-		display, overflow, total := foldToolOutput(src, contentW, maxToolOutputLines)
+		_, overflow, total := foldToolOutput(src, contentW, maxToolOutputLines)
 		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}
 		if overflow {
 			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
-			fold := FoldToggle{
-				Collapsed: msg.Collapsed,
-				Prefix:    bar + " ",
-				Hint:      fmt.Sprintf("%d more lines", total-maxToolOutputLines+1),
-			}
+			icon := bar + " " + AssistantToolStyle.Render(msg.Content)
 			if msg.Collapsed {
-				result = bar + " " + AssistantToolStyle.Render(display) + "\n" + fold.View()
+				// Compact: icon + fold hint on one line.
+				hint := icon + " " + foldStyle.Render(
+					fmt.Sprintf("─── %d lines ─ click to expand", total),
+				)
+				result = hint
 			} else {
-				result = bar + " " + AssistantToolStyle.Render(src) + "\n" + fold.View()
+				fold := FoldToggle{Collapsed: false, Prefix: bar + " ", Hint: ""}
+				result = icon + "\n" + bar + " " + AssistantToolStyle.Render(src) + "\n" + fold.View()
 			}
 		} else {
 			s := AssistantToolStyle.Render(msg.Content)

@@ -17,7 +17,8 @@ type Widget struct {
 	Kind   WidgetKind
 	Y      int
 	Height int
-	Index  int // WidgetMessage → messages index; WidgetToolbar → Items index, -1 for fold row
+	Index  int    // WidgetMessage → messages index; WidgetToolbar → Items index, -1 for fold row
+	Label  string // human-readable label: "⚙ Read", "[thinking]", "toolbar"
 }
 
 // WidgetLayout collects all interactive regions for the current frame.
