@@ -505,13 +505,22 @@ func foldToolOutput(content string, width int, maxLines int) (display string, co
 
 // handleViewportClick toggles the fold state of the message at mouseY.
 // mouseY is the terminal row (0-indexed), viewport starts at terminal row 0.
+// Uses msgYStarts (populated by renderContent) as the single source of truth
+// for message positions, matching the viewport layout exactly.
 func (m *ChatModel) handleViewportClick(mouseY int) bool {
 	if mouseY < 0 || mouseY >= m.viewport.Height {
 		return false
 	}
+	if len(m.msgYStarts) != len(m.messages) {
+		return false // msgYStarts stale (not yet rendered this cycle)
+	}
 
 	// Map to content Y (accounting for viewport scroll offset).
 	contentY := mouseY + m.viewport.YOffset
+
+	if contentY >= m.contentHeight {
+		return false
+	}
 
 	const maxVisible = 50
 	start := 0
@@ -519,34 +528,33 @@ func (m *ChatModel) handleViewportClick(mouseY int) bool {
 		start = len(m.messages) - maxVisible
 	}
 
-	var prevRole string
-	y := 0 // accumulated Y position in content
+	// Find the message at contentY using msgYStarts.
 	for i := start; i < len(m.messages); i++ {
-		msg := &m.messages[i]
-
-		// Account for blank line separators between blocks.
-		if msg.Role == "user" && prevRole != "" && prevRole != "user" {
-			y++
+		ys := m.msgYStarts[i]
+		if ys < 0 {
+			continue
 		}
-		if msg.Role == "assistant" && prevRole != "assistant" {
-			y++
+		// Find the end Y: the next rendered message's start Y,
+		// or contentHeight for the last rendered message.
+		ye := m.contentHeight
+		for j := i + 1; j < len(m.msgYStarts); j++ {
+			if m.msgYStarts[j] >= 0 {
+				ye = m.msgYStarts[j]
+				break
+			}
 		}
 
-		rendered := m.renderMessage(msg)
-		h := visualLineCount(rendered, m.viewport.Width) + 1 // rendered + trailing \n from renderContent
-
-		if contentY >= y && contentY < y+h {
+		if contentY >= ys && contentY < ye {
+			msg := &m.messages[i]
 			if !msg.wasFolded {
 				return false // not foldable
 			}
 			msg.Collapsed = !msg.Collapsed
 			msg.dirty = true
 			msg.rendered = ""
-			debugf("click toggle: msg[%d] role=%s collapsed=%v", i, msg.Role, msg.Collapsed)
+			debugf("click toggle: msg[%d] role=%s collapsed=%v yOff=%d", i, msg.Role, msg.Collapsed, m.viewport.YOffset)
 			return true
 		}
-		y += h
-		prevRole = msg.Role
 	}
 	return false
 }

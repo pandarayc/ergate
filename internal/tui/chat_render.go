@@ -116,6 +116,7 @@ func (m *ChatModel) View() string {
 
 // renderContent builds the message viewport content from cached renders.
 // Only the last maxVisible messages are included.
+// Also populates msgYStarts for use by handleViewportClick.
 func (m *ChatModel) renderContent() string {
 	const maxVisible = 50
 	msgs := m.messages
@@ -124,22 +125,33 @@ func (m *ChatModel) renderContent() string {
 		start = len(msgs) - maxVisible
 	}
 
+	m.msgYStarts = make([]int, len(msgs))
+	for i := range m.msgYStarts {
+		m.msgYStarts[i] = -1 // mark unrendered
+	}
+
 	var b strings.Builder
 	var prevRole string
+	y := 0
 	for i := start; i < len(msgs); i++ {
 		msg := &msgs[i]
 		// Separation
 		if msg.Role == "user" && prevRole != "" && prevRole != "user" {
 			b.WriteString("\n")
+			y++
 		}
 		if msg.Role == "assistant" && prevRole != "assistant" {
 			b.WriteString("\n")
+			y++
 		}
-		// Render (cached)
-		b.WriteString(m.renderMessage(msg))
+		m.msgYStarts[i] = y
+		rendered := m.renderMessage(msg)
+		b.WriteString(rendered)
 		b.WriteString("\n")
+		y += visualLineCount(rendered, m.viewport.Width) + 1
 		prevRole = msg.Role
 	}
+	m.contentHeight = y
 	return b.String()
 }
 
