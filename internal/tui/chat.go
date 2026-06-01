@@ -75,16 +75,9 @@ type ChatModel struct {
 	// copyMode handles text selection and OSC 52 clipboard copy.
 	copyMode CopyMode
 
-	// msgYStarts stores each message's starting Y position in the rendered
-	// content, populated by renderContent and consumed by handleViewportClick.
-	// This is the single source of truth for message positions, avoiding
-	// discrepancies between visualLineCount and prewrapContent.
-	msgYStarts []int
-
-	// contentHeight is the total Y extent of rendered content, set by
-	// renderContent. Used by handleViewportClick to reject clicks beyond
-	// the last message.
-	contentHeight int
+	// layout collects interactive widget positions for hit-test dispatch.
+	// Populated by renderContent and View(), consumed by mouse event handlers.
+	layout WidgetLayout
 
 	// Session persistence
 	sessionStore *session.Store

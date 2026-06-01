@@ -69,6 +69,33 @@ func (m *ChatModel) View() string {
 	if tb := m.toolsBar.View(m.width); tb != "" {
 		bottom.WriteString(tb)
 		bottom.WriteString("\n")
+
+		// Populate footer widgets for hit testing.
+		m.layout.Footer = m.layout.Footer[:0]
+		tbBaseY := m.viewport.Height
+		collapsed := !m.toolsBar.Expanded && len(m.toolsBar.Items) > maxToolBarLines
+		n := len(m.toolsBar.Items)
+		if collapsed {
+			n = maxToolBarLines - 1
+		}
+		for i := 0; i < n; i++ {
+			m.layout.Footer = append(m.layout.Footer, Widget{
+				Kind:   WidgetToolbar,
+				Y:      tbBaseY + i,
+				Height: 1,
+				Index:  i,
+			})
+		}
+		if collapsed {
+			m.layout.Footer = append(m.layout.Footer, Widget{
+				Kind:   WidgetToolbar,
+				Y:      tbBaseY + (maxToolBarLines - 1),
+				Height: 1,
+				Index:  -1, // fold toggle row
+			})
+		}
+	} else {
+		m.layout.Footer = m.layout.Footer[:0]
 	}
 
 	// Spacer
@@ -104,9 +131,14 @@ func (m *ChatModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), bottom.String())
 }
 
+// headerLines account for the Ergate title + model line rendered in View()
+// before renderContent output. Widget Y values must include this offset to
+// align with contentY = mouseY + YOffset (which is full-viewport-content-relative).
+const headerLines = 2
+
 // renderContent builds the message viewport content from cached renders.
 // Only the last maxVisible messages are included.
-// Also populates msgYStarts for use by handleViewportClick.
+// Also populates layout.Content for use by hit-test dispatch.
 func (m *ChatModel) renderContent() string {
 	const maxVisible = 50
 	msgs := m.messages
@@ -115,17 +147,14 @@ func (m *ChatModel) renderContent() string {
 		start = len(msgs) - maxVisible
 	}
 
-	m.msgYStarts = make([]int, len(msgs))
-	for i := range m.msgYStarts {
-		m.msgYStarts[i] = -1 // mark unrendered
-	}
+	m.layout.Content = m.layout.Content[:0]
+	m.layout.ContentHeight = 0
 
 	var b strings.Builder
 	var prevRole string
 	y := 0
 	for i := start; i < len(msgs); i++ {
 		msg := &msgs[i]
-		// Separation
 		if msg.Role == "user" && prevRole != "" && prevRole != "user" {
 			b.WriteString("\n")
 			y++
@@ -134,14 +163,23 @@ func (m *ChatModel) renderContent() string {
 			b.WriteString("\n")
 			y++
 		}
-		m.msgYStarts[i] = y
+
 		rendered := m.renderMessage(msg)
+
+		if msg.wasFolded && (msg.Role == "tool" || msg.Role == "thinking") {
+			m.layout.Content = append(m.layout.Content, Widget{
+				Kind:   WidgetMessage,
+				Y:      headerLines + y,
+				Height: 1, // the fold toggle bar itself
+				Index:  i,
+			})
+		}
 		b.WriteString(rendered)
 		b.WriteString("\n")
 		y += visualLineCount(rendered, m.viewport.Width) + 1
 		prevRole = msg.Role
 	}
-	m.contentHeight = y
+	m.layout.ContentHeight = headerLines + y
 	return b.String()
 }
 

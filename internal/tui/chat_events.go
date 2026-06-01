@@ -516,92 +516,62 @@ func foldToolOutput(content string, width int, maxLines int) (display string, co
 	return display, true, totalLines
 }
 
-// handleViewportClick toggles the fold state of the message at mouseY.
+// handleViewportClick toggles the fold state of a message widget at mouseY.
 // mouseY is the terminal row (0-indexed), viewport starts at terminal row 0.
-// Uses msgYStarts (populated by renderContent) as the single source of truth
-// for message positions, matching the viewport layout exactly.
+// Uses layout.Content (populated by renderContent) for hit testing.
 func (m *ChatModel) handleViewportClick(mouseY int) bool {
 	if mouseY < 0 || mouseY >= m.viewport.Height {
 		return false
 	}
-	if len(m.msgYStarts) != len(m.messages) {
-		return false // msgYStarts stale (not yet rendered this cycle)
+	if m.layout.ContentHeight == 0 {
+		return false // layout not yet computed this cycle
 	}
 
-	// Map to content Y (accounting for viewport scroll offset).
 	contentY := mouseY + m.viewport.YOffset
-
-	if contentY >= m.contentHeight {
+	if contentY >= m.layout.ContentHeight {
 		return false
 	}
 
-	const maxVisible = 50
-	start := 0
-	if len(m.messages) > maxVisible {
-		start = len(m.messages) - maxVisible
-	}
-
-	// Find the message at contentY using msgYStarts.
-	for i := start; i < len(m.messages); i++ {
-		ys := m.msgYStarts[i]
-		if ys < 0 {
+	for i := range m.layout.Content {
+		w := &m.layout.Content[i]
+		if contentY < w.Y || contentY >= w.Y+w.Height {
 			continue
 		}
-		// Find the end Y: the next rendered message's start Y,
-		// or contentHeight for the last rendered message.
-		ye := m.contentHeight
-		for j := i + 1; j < len(m.msgYStarts); j++ {
-			if m.msgYStarts[j] >= 0 {
-				ye = m.msgYStarts[j]
-				break
-			}
+		if w.Kind != WidgetMessage || w.Index < 0 || w.Index >= len(m.messages) {
+			continue
 		}
-
-		if contentY >= ys && contentY < ye {
-			msg := &m.messages[i]
-			if !msg.wasFolded {
-				return false // not foldable
-			}
-			msg.Collapsed = !msg.Collapsed
-			msg.dirty = true
-			msg.rendered = ""
-			debugf("click toggle: msg[%d] role=%s collapsed=%v yOff=%d", i, msg.Role, msg.Collapsed, m.viewport.YOffset)
-			return true
-		}
+		msg := &m.messages[w.Index]
+		msg.Collapsed = !msg.Collapsed
+		msg.dirty = true
+		msg.rendered = ""
+		debugf("click toggle: msg[%d] role=%s collapsed=%v yOff=%d", w.Index, msg.Role, msg.Collapsed, m.viewport.YOffset)
+		return true
 	}
 	return false
 }
 
-// handleToolBarClick processes clicks on the toolsbar.
+// handleToolBarClick processes clicks on the toolsbar using layout.Footer widgets.
 func (m *ChatModel) handleToolBarClick(mouseY int) bool {
-	if len(m.toolsBar.Items) == 0 {
-		return false
-	}
-	tbStartY := m.viewport.Height
-	tbHeight := m.toolsBar.Height()
-	tbEndY := tbStartY + tbHeight - 1
-
-	if mouseY < tbStartY || mouseY > tbEndY {
-		return false
-	}
-
-	idx := mouseY - tbStartY
-	collapsed := !m.toolsBar.Expanded && len(m.toolsBar.Items) > maxToolBarLines
-
-	if collapsed && idx == maxToolBarLines-1 {
-		m.toolsBar.ToggleExpand()
-		m.syncViewportHeight()
-		return true
-	}
-
-	if idx >= 0 && idx < len(m.toolsBar.Items) {
-		item := m.toolsBar.Items[idx]
-		if item.Expand != "" {
-			// ToolBar click with expand → handled by AppModel via callback
+	for i := range m.layout.Footer {
+		w := &m.layout.Footer[i]
+		if mouseY < w.Y || mouseY >= w.Y+w.Height {
+			continue
+		}
+		// Fold toggle row.
+		if w.Index < 0 {
+			m.toolsBar.ToggleExpand()
+			m.syncViewportHeight()
 			return true
 		}
+		// Toolbar item click.
+		if w.Index >= 0 && w.Index < len(m.toolsBar.Items) {
+			item := m.toolsBar.Items[w.Index]
+			if item.Expand != "" {
+				return true
+			}
+		}
+		return false
 	}
-
 	return false
 }
 

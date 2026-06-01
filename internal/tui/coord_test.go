@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -29,26 +30,24 @@ func TestYTracking_MultipleThinking(t *testing.T) {
 		{Role: "assistant", Content: "third answer."},
 	}
 
-	// Render once to populate wasFolded, rendered cache, and msgYStarts.
+	// Render once to populate wasFolded, rendered cache, and layout.
 	_ = m.renderContent()
 
-	t.Logf("msgYStarts:")
-	for i, ys := range m.msgYStarts {
-		t.Logf("  msg[%2d] role=%-10s yStart=%2d", i, m.messages[i].Role, ys)
+	t.Logf("layout.Content widgets:")
+	for _, w := range m.layout.Content {
+		if w.Index >= 0 && w.Index < len(m.messages) {
+			t.Logf("  msg[%2d] role=%-10s y=%2d h=%d", w.Index, m.messages[w.Index].Role, w.Y, w.Height)
+		}
 	}
 
-	// For each thinking message, simulate scrolling so the message is visible
-	// in the viewport, then click at the center of its visible portion.
-	buildMsgRange := func(i int) (int, int) {
-		ys := m.msgYStarts[i]
-		ye := ys + 1 // sentinel
-		for j := i + 1; j < len(m.msgYStarts); j++ {
-			if m.msgYStarts[j] >= 0 {
-				ye = m.msgYStarts[j]
-				break
+	// Find the widget for a message index.
+	findWidget := func(i int) *Widget {
+		for idx := range m.layout.Content {
+			if m.layout.Content[idx].Index == i {
+				return &m.layout.Content[idx]
 			}
 		}
-		return ys, ye
+		return nil
 	}
 
 	for i := range m.messages {
@@ -56,7 +55,11 @@ func TestYTracking_MultipleThinking(t *testing.T) {
 			continue
 		}
 
-		yrStart, yrEnd := buildMsgRange(i)
+		w := findWidget(i)
+		if w == nil {
+			t.Fatalf("thinking msg[%d]: no widget found", i)
+		}
+		yrStart, yrEnd := w.Y, w.Y+w.Height
 
 		// Scroll so the message is visible in viewport.
 		if yrEnd-yrStart >= m.viewport.Height {
@@ -86,12 +89,16 @@ func TestYTracking_MultipleThinking(t *testing.T) {
 			t.Errorf("thinking msg[%d]: expected Collapsed=false after first click (unfold)", i)
 		}
 
-		// Re-render to update msgYStarts for expanded layout.
+		// Re-render to update layout for expanded layout.
 		_ = m.renderContent()
 
 		// Second click: should re-fold (Collapsed=true).
-		// Recalculate clickY for the expanded layout.
-		yrStart, yrEnd = buildMsgRange(i)
+		// Recalculate widget position for the expanded layout.
+		w = findWidget(i)
+		if w == nil {
+			t.Fatalf("thinking msg[%d]: widget disappeared after unfold", i)
+		}
+		yrStart, yrEnd = w.Y, w.Y+w.Height
 		visStart = yrStart - m.viewport.YOffset
 		visEnd = yrEnd - m.viewport.YOffset
 		visEnd = min(visEnd, m.viewport.Height)
@@ -117,7 +124,7 @@ func TestHandleViewportClick_EdgeCases(t *testing.T) {
 	m.messages = []ChatMessage{
 		{Role: "user", Content: "hello"},
 	}
-	_ = m.renderContent() // populates msgYStarts
+	_ = m.renderContent()
 
 	// Click outside viewport (negative mouseY).
 	if m.handleViewportClick(-1) {
@@ -128,7 +135,7 @@ func TestHandleViewportClick_EdgeCases(t *testing.T) {
 		t.Error("expected false for mouseY=20 >= Height")
 	}
 
-	// Click beyond contentHeight (user msg is ~2 lines, contentHeight ≈ 3).
+	// Click beyond contentHeight.
 	m.viewport.YOffset = 100
 	if m.handleViewportClick(0) {
 		t.Error("expected false for contentY=100 >= contentHeight")
@@ -136,14 +143,14 @@ func TestHandleViewportClick_EdgeCases(t *testing.T) {
 	m.viewport.YOffset = 0
 
 	// Click on non-foldable message (user).
-	if m.handleViewportClick(0) {
-		t.Error("expected false for user message (wasFolded=false)")
+	if m.handleViewportClick(headerLines) {
+		t.Error("expected false for user message (no widget)")
 	}
 
-	// Stale msgYStarts (length mismatch).
-	m.messages = append(m.messages, ChatMessage{Role: "assistant", Content: "test"})
+	// Stale layout (ContentHeight == 0).
+	m.layout.ContentHeight = 0
 	if m.handleViewportClick(0) {
-		t.Error("expected false when msgYStarts is stale")
+		t.Error("expected false when layout is stale")
 	}
 }
 
@@ -152,12 +159,25 @@ func handleViewportClickCheck(m ChatModel, clickY int, msgIdx int, t *testing.T)
 	t.Helper()
 	result := m.handleViewportClick(clickY)
 	if !result {
-		ys := m.msgYStarts[msgIdx]
+		w := findWidgetForTest(m, msgIdx)
+		wInfo := "nil"
+		if w != nil {
+			wInfo = fmt.Sprintf("y=%d h=%d", w.Y, w.Height)
+		}
 		t.Errorf("thinking msg[%d]: handleViewportClick(y=%d) returned false\n"+
-			"  msgYStart=%d YOffset=%d viewport.Height=%d wasFolded=%v",
-			msgIdx, clickY, ys,
+			"  widget=%s YOffset=%d viewport.Height=%d wasFolded=%v",
+			msgIdx, clickY, wInfo,
 			m.viewport.YOffset, m.viewport.Height, m.messages[msgIdx].wasFolded)
 		return false
 	}
 	return true
+}
+
+func findWidgetForTest(m ChatModel, msgIdx int) *Widget {
+	for i := range m.layout.Content {
+		if m.layout.Content[i].Index == msgIdx {
+			return &m.layout.Content[i]
+		}
+	}
+	return nil
 }
