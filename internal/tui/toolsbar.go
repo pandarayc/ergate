@@ -43,7 +43,6 @@ func (tb *ToolsBar) View(width int) string {
 	}
 	available := width - 2 // left padding
 	row := lipgloss.NewStyle().Foreground(Muted).Padding(0, 1)
-	accent := lipgloss.NewStyle().Foreground(Accent).Padding(0, 1)
 
 	collapsed := !tb.Expanded && len(tb.Items) > maxToolBarLines
 
@@ -63,8 +62,11 @@ func (tb *ToolsBar) View(width int) string {
 
 	if collapsed {
 		remaining := len(tb.Items) - (maxToolBarLines - 1)
-		fold := accent.Render("[+] " + pluralize(remaining, "more item", "more items") + " — click to expand")
-		lines = append(lines, fold)
+		fold := FoldToggle{
+			Collapsed: true,
+			Hint:      pluralize(remaining, "more item", "more items"),
+		}
+		lines = append(lines, fold.View())
 	}
 
 	return strings.Join(lines, "\n")

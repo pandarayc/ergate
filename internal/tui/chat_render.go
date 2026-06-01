@@ -174,17 +174,15 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 		}
 		if overflow {
 			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
+			fold := FoldToggle{
+				Collapsed: msg.Collapsed,
+				Prefix:    bar + " ",
+				Hint:      fmt.Sprintf("%d more lines", total-maxToolOutputLines+1),
+			}
 			if msg.Collapsed {
-				remaining := total - maxToolOutputLines + 1
-				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
-					fmt.Sprintf("─── [+] %d more lines (click to expand) ───", remaining),
-				)
-				result = bar + " " + AssistantToolStyle.Render(display) + "\n" + header
+				result = bar + " " + AssistantToolStyle.Render(display) + "\n" + fold.View()
 			} else {
-				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
-					"─── [-] click to collapse ───",
-				)
-				result = bar + " " + AssistantToolStyle.Render(src) + "\n" + header
+				result = bar + " " + AssistantToolStyle.Render(src) + "\n" + fold.View()
 			}
 		} else {
 			s := AssistantToolStyle.Render(msg.Content)
@@ -203,17 +201,15 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 		}
 		if overflow {
 			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
+			fold := FoldToggle{
+				Collapsed: msg.Collapsed,
+				Prefix:    bar + " ",
+				Hint:      fmt.Sprintf("%d more lines", total-maxThinkingLines+1),
+			}
 			if msg.Collapsed {
-				remaining := total - maxThinkingLines + 1
-				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
-					fmt.Sprintf("─── [+] %d more lines (click to expand) ───", remaining),
-				)
-				result = bar + " " + ThinkingStyle.Render("[thinking] " + display) + "\n" + header
+				result = bar + " " + ThinkingStyle.Render("[thinking] " + display) + "\n" + fold.View()
 			} else {
-				header := bar + " " + lipgloss.NewStyle().Foreground(Accent).Bold(true).Render(
-					"─── [-] click to collapse ───",
-				)
-				result = bar + " " + ThinkingStyle.Render("[thinking] " + msg.Content) + "\n" + header
+				result = bar + " " + ThinkingStyle.Render("[thinking] " + msg.Content) + "\n" + fold.View()
 			}
 		} else {
 			result = ThinkingStyle.Width(contentW).Render("[thinking] " + msg.Content)
