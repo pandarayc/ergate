@@ -165,18 +165,20 @@ func (m *ChatModel) renderContent() string {
 		}
 
 		rendered := m.renderMessage(msg)
+		b.WriteString(rendered)
+		b.WriteString("\n")
+		vis := visualLineCount(rendered, m.viewport.Width)
 
 		if msg.wasFolded && (msg.Role == "tool" || msg.Role == "thinking") {
+			// Fold bar is the last visual line of the rendered output.
 			m.layout.Content = append(m.layout.Content, Widget{
 				Kind:   WidgetMessage,
-				Y:      headerLines + y,
-				Height: 1, // the fold toggle bar itself
+				Y:      headerLines + y + vis - 1,
+				Height: 1,
 				Index:  i,
 			})
 		}
-		b.WriteString(rendered)
-		b.WriteString("\n")
-		y += visualLineCount(rendered, m.viewport.Width) + 1
+		y += vis + 1
 		prevRole = msg.Role
 	}
 	m.layout.ContentHeight = headerLines + y

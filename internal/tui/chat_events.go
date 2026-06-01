@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/raydraw/ergate/internal/engine"
+	"github.com/raydraw/ergate/internal/session"
 )
 
 // Update handles messages for the chat page.
@@ -324,27 +325,63 @@ func (m *ChatModel) handleCommand(input string) {
 	case "/save":
 		m.saveSession()
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "Session saved."})
+	case "/resume":
+		if m.sessionStore == nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: "No session store available."})
+			break
+		}
+		// Save current session first
+		m.saveSession()
+		
+		sessID := ""
+		if len(parts) > 1 {
+			sessID = parts[1]
+		}
+		
+		var sess *session.Session
+		var err error
+		if sessID != "" {
+			sess, err = m.sessionStore.Load(sessID)
+		} else {
+			sess, err = m.sessionStore.Latest()
+		}
+		
+		if err != nil {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("Resume failed: %v", err)})
+		} else if sess == nil {
+			m.messages = append(m.messages, ChatMessage{Role: "system", Content: "No saved sessions to resume."})
+		} else {
+			m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
+			m.messages = []ChatMessage{
+				{Role: "system", Content: fmt.Sprintf("[Resumed session: %s - %d messages]", sess.ID, len(sess.Messages))},
+			}
+			m.messages = append(m.messages, convertMessages(m.eng.Messages())...)
+			m.sessionID = sess.ID
+			m.totalInTokens = sess.Usage.InputTokens
+			m.totalOutTokens = sess.Usage.OutputTokens
+			m.forceScrollBottom = true
+		}
 	case "/load":
 		if m.sessionStore != nil && len(parts) > 1 {
-			sess, err := m.sessionStore.Load(parts[1])
-			if err == nil {
-				m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
-				m.messages = []ChatMessage{{Role: "system", Content: fmt.Sprintf("[Loaded: %s]", parts[1])}}
-				m.sessionID = parts[1]
-			} else {
-				m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("Load failed: %v", err)})
-			}
+		sess, err := m.sessionStore.Load(parts[1])
+		if err == nil {
+			m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
+			m.messages = []ChatMessage{{Role: "system", Content: fmt.Sprintf("[Loaded: %s]", parts[1])}}
+			m.sessionID = parts[1]
+		} else {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("Load failed: %v", err)})
+		}
 		}
 	case "/sessions":
 		if m.sessionStore != nil {
-			ids, _ := m.sessionStore.List()
-			m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Sessions: %v", ids)})
+		ids, _ := m.sessionStore.List()
+		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Sessions: %v", ids)})
 		}
 	case "/help":
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "/help /exit /clear /model /usage /config /save /load /sessions /cost /status"})
 	case "/model":
 		if len(parts) > 1 {
-			m.cfg.Model = parts[1]
+		m.cfg.Model = parts[1]
 		}
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Model: %s", m.cfg.Model)})
 	case "/usage":
@@ -356,15 +393,15 @@ func (m *ChatModel) handleCommand(input string) {
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Est. cost: $%.4f  (in:%d out:%d)", cost, in, out)})
 	case "/config":
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf(
-			"Provider:%s  Model:%s  Permissions:%s  MaxTurns:%d",
-			m.cfg.APIProvider, m.cfg.Model, m.cfg.PermissionMode, m.cfg.MaxTurns,
+		"Provider:%s  Model:%s  Permissions:%s  MaxTurns:%d",
+		m.cfg.APIProvider, m.cfg.Model, m.cfg.PermissionMode, m.cfg.MaxTurns,
 		)})
 	case "/status":
 		msgs := m.eng.Messages()
 		in, out := m.eng.TotalUsage()
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf(
-			"Model:%s  Messages:%d  Tokens(in:%d out:%d)  Session:%s",
-			m.cfg.Model, len(msgs), in, out, m.sessionID,
+		"Model:%s  Messages:%d  Tokens(in:%d out:%d)  Session:%s",
+		m.cfg.Model, len(msgs), in, out, m.sessionID,
 		)})
 	default:
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Unknown: %s", parts[0])})
@@ -377,32 +414,32 @@ func (m *ChatModel) handleEngineEvent(event engine.Event) {
 	switch event.Type {
 	case engine.EventText:
 		if text, ok := event.Data.(string); ok {
-			if m.coalesceDirty && m.coalesceRole != "assistant" {
-				m.flushCoalesced()
-			}
-			m.coalesceText += text
-			m.coalesceRole = "assistant"
-			m.coalesceDirty = true
+		if m.coalesceDirty && m.coalesceRole != "assistant" {
+			m.flushCoalesced()
+		}
+		m.coalesceText += text
+		m.coalesceRole = "assistant"
+		m.coalesceDirty = true
 		}
 		m.currentTurn = event.Turn
 
 	case engine.EventThinking:
 		if text, ok := event.Data.(string); ok {
-			if m.coalesceDirty && m.coalesceRole != "thinking" {
-				m.flushCoalesced()
-			}
-			m.coalesceText += text
-			m.coalesceRole = "thinking"
-			m.coalesceDirty = true
+		if m.coalesceDirty && m.coalesceRole != "thinking" {
+			m.flushCoalesced()
+		}
+		m.coalesceText += text
+		m.coalesceRole = "thinking"
+		m.coalesceDirty = true
 		}
 
 	case engine.EventToolUse:
 		m.flushCoalesced()
 		if data, ok := event.Data.(map[string]any); ok {
-			name, _ := data["name"].(string)
-			m.currentToolName = name
-			input, _ := data["input"].(string)
-			m.messages = append(m.messages, ChatMessage{Role: "tool", Content: fmt.Sprintf("⚙ %s", name), Detail: input})
+		name, _ := data["name"].(string)
+		m.currentToolName = name
+		input, _ := data["input"].(string)
+		m.messages = append(m.messages, ChatMessage{Role: "tool", Content: fmt.Sprintf("⚙ %s", name), Detail: input})
 		}
 		m.refreshToolsBar()
 
@@ -411,24 +448,24 @@ func (m *ChatModel) handleEngineEvent(event engine.Event) {
 		m.currentToolName = ""
 		m.refreshToolsBar()
 		if data, ok := event.Data.(map[string]any); ok {
-			content, _ := data["content"].(string)
-			isError, _ := data["is_error"].(bool)
-			if isError {
-				m.messages = append(m.messages, ChatMessage{Role: "error", Content: content})
-			} else {
-				m.messages = append(m.messages, ChatMessage{
-					Role: "tool", Content: content, Detail: content,
-				})
-			}
+		content, _ := data["content"].(string)
+		isError, _ := data["is_error"].(bool)
+		if isError {
+			m.messages = append(m.messages, ChatMessage{Role: "error", Content: content})
+		} else {
+			m.messages = append(m.messages, ChatMessage{
+				Role: "tool", Content: content, Detail: content,
+			})
+		}
 		}
 
 	case engine.EventError:
 		m.flushCoalesced()
 		var s string
 		if err, ok := event.Data.(error); ok {
-			s = err.Error()
+		s = err.Error()
 		} else if str, ok := event.Data.(string); ok {
-			s = str
+		s = str
 		}
 		m.messages = append(m.messages, ChatMessage{Role: "error", Content: s})
 		m.running = false
@@ -456,7 +493,7 @@ func (m *ChatModel) listenEvents() tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-m.eventChan
 		if !ok {
-			return engineEventMsg{event: engine.Event{Type: engine.EventDone}}
+		return engineEventMsg{event: engine.Event{Type: engine.EventDone}}
 		}
 		return engineEventMsg{event: event}
 	}
@@ -500,13 +537,13 @@ func foldToolOutput(content string, width int, maxLines int) (display string, co
 	for i, line := range lines {
 		lineWidth := len([]rune(line))
 		if lineWidth == 0 {
-			visual++
+		visual++
 		} else {
-			visual += (lineWidth + width - 1) / width
+		visual += (lineWidth + width - 1) / width
 		}
 		if visual >= maxLines-1 {
-			cut = i + 1
-			break
+		cut = i + 1
+		break
 		}
 	}
 	if cut == 0 || cut > len(lines) {
@@ -535,10 +572,10 @@ func (m *ChatModel) handleViewportClick(mouseY int) bool {
 	for i := range m.layout.Content {
 		w := &m.layout.Content[i]
 		if contentY < w.Y || contentY >= w.Y+w.Height {
-			continue
+		continue
 		}
 		if w.Kind != WidgetMessage || w.Index < 0 || w.Index >= len(m.messages) {
-			continue
+		continue
 		}
 		msg := &m.messages[w.Index]
 		msg.Collapsed = !msg.Collapsed
@@ -555,20 +592,20 @@ func (m *ChatModel) handleToolBarClick(mouseY int) bool {
 	for i := range m.layout.Footer {
 		w := &m.layout.Footer[i]
 		if mouseY < w.Y || mouseY >= w.Y+w.Height {
-			continue
+		continue
 		}
 		// Fold toggle row.
 		if w.Index < 0 {
-			m.toolsBar.ToggleExpand()
-			m.syncViewportHeight()
-			return true
+		m.toolsBar.ToggleExpand()
+		m.syncViewportHeight()
+		return true
 		}
 		// Toolbar item click.
 		if w.Index >= 0 && w.Index < len(m.toolsBar.Items) {
-			item := m.toolsBar.Items[w.Index]
-			if item.Expand != "" {
-				return true
-			}
+		item := m.toolsBar.Items[w.Index]
+		if item.Expand != "" {
+			return true
+		}
 		}
 		return false
 	}
