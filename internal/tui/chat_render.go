@@ -170,11 +170,11 @@ func (m *ChatModel) renderContent() string {
 		vis := visualLineCount(rendered, m.viewport.Width)
 
 		if msg.wasFolded && (msg.Role == "tool" || msg.Role == "thinking") {
-			// Widget covers the entire message area — clicking anywhere toggles.
+			// Widget covers the full content extent (rendered lines + trailing newline).
 			m.layout.Content = append(m.layout.Content, Widget{
 				Kind:   WidgetMessage,
 				Y:      headerLines + y,
-				Height: vis,
+				Height: vis + 1,
 				Index:  i,
 			})
 		}
