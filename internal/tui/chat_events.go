@@ -229,22 +229,32 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 }
 
 func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel, tea.Cmd) {
-	debugf("Mouse: action=%v button=%v x=%d y=%d copyMode=%v", msg.Action, msg.Button, msg.X, msg.Y, m.copyMode.IsActive())
+	debugf("Mouse: action=%v button=%v x=%d y=%d copyMode=%v vpHeight=%d", msg.Action, msg.Button, msg.X, msg.Y, m.copyMode.IsActive(), m.viewport.Height)
 
-	// Wheel scrolling.
+	// Coarse hit test: is the mouse in the viewport (content) area?
+	// Footer (toolbar, input, spacer) starts at viewport.Height.
+	inViewport := msg.Y >= 0 && msg.Y < m.viewport.Height
+
+	// Wheel scrolling — only in viewport area.
 	if msg.Button == tea.MouseButtonWheelUp {
-		m.viewport.ScrollUp(3)
+		if inViewport {
+			m.viewport.ScrollUp(3)
+		}
 		return m, nil
 	}
 	if msg.Button == tea.MouseButtonWheelDown {
-		m.viewport.ScrollDown(3)
+		if inViewport {
+			m.viewport.ScrollDown(3)
+		}
 		return m, nil
 	}
 
-	// Left button press → enter copy mode.
+	// Left button press → enter copy mode only in viewport area.
 	if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-		m.copyMode.Enter(msg.X, msg.Y, m.viewport.YOffset)
-		debugf("copyMode enter: x=%d y=%d anchorY=%d", msg.X, msg.Y, m.copyMode.anchorY)
+		if inViewport {
+			m.copyMode.Enter(msg.X, msg.Y, m.viewport.YOffset)
+			debugf("copyMode enter: x=%d y=%d anchorY=%d", msg.X, msg.Y, m.copyMode.anchorY)
+		}
 		return m, nil
 	}
 
@@ -280,10 +290,13 @@ func (m ChatModel) handleMouseMsg(msg tea.MouseMsg, cmds *[]tea.Cmd) (ChatModel,
 		}
 		m.copyMode.Cancel()
 
-		// Plain click — check viewport targets.
-		if m.handleToolBarClick(msg.Y) {
-			*cmds = append(*cmds, m.syncMouse())
-			return m, tea.Batch(*cmds...)
+		// Plain click — dispatch by region.
+		if !inViewport {
+			if m.handleToolBarClick(msg.Y) {
+				*cmds = append(*cmds, m.syncMouse())
+				return m, tea.Batch(*cmds...)
+			}
+			return m, nil
 		}
 		if m.handleViewportClick(msg.Y) {
 			*cmds = append(*cmds, m.syncMouse())
