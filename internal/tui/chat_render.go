@@ -233,22 +233,21 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 			result = s
 		}
 	case "thinking":
-		thinkW := max(contentW-12, 20)
-		display, overflow, total := foldToolOutput(msg.Content, thinkW, maxThinkingLines)
+		_, overflow, total := foldToolOutput(msg.Content, contentW, maxThinkingLines)
 		if overflow && !msg.wasFolded {
 			msg.Collapsed = true
 			msg.wasFolded = true
 		}
 		if overflow {
 			bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
-			fold := FoldToggle{
-				Collapsed: msg.Collapsed,
-				Prefix:    bar + " ",
-				Hint:      fmt.Sprintf("%d more lines", total-maxThinkingLines+1),
-			}
 			if msg.Collapsed {
-				result = bar + " " + ThinkingStyle.Render("[thinking] " + display) + "\n" + fold.View()
+				// Compact single line: thinking label doubles as fold bar.
+				hint := ThinkingStyle.Render("[thinking]") + " " + foldStyle.Render(
+					fmt.Sprintf("─── %d lines ─ click to expand", total),
+				)
+				result = bar + " " + hint
 			} else {
+				fold := FoldToggle{Collapsed: false, Prefix: bar + " ", Hint: ""}
 				result = bar + " " + ThinkingStyle.Render("[thinking] " + msg.Content) + "\n" + fold.View()
 			}
 		} else {
