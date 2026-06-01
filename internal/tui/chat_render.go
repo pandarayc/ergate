@@ -134,7 +134,8 @@ func (m *ChatModel) View() string {
 // headerLines account for the Ergate title + model line rendered in View()
 // before renderContent output. Widget Y values must include this offset to
 // align with contentY = mouseY + YOffset (which is full-viewport-content-relative).
-const headerLines = 2
+// The header is " Ergate   model: xxx\n\n" → 1 text line + 2 empty lines = 3 lines.
+const headerLines = 3
 
 // renderContent builds the message viewport content from cached renders.
 // Only the last maxVisible messages are included.
