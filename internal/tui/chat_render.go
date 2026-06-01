@@ -90,26 +90,16 @@ func (m *ChatModel) View() string {
 
 	// Status bar
 	in, out := m.eng.TotalUsage()
-	totalTokens := in + out
-	ctxPct := 0
-	if totalTokens > 0 {
-		ctxPct = totalTokens * 100 / 128000
+	sb := StatusBar{
+		Turn:       m.currentTurn,
+		TotalIn:    in,
+		TotalOut:   out,
+		Model:      m.cfg.Model,
+		CacheRatio: m.eng.CacheRatio(),
+		SessionID:  m.sessionID,
+		Running:    m.running,
 	}
-	cost := estimateCost(m.cfg.Model, in, out)
-	cacheRatio := m.eng.CacheRatio()
-	cachePart := fmt.Sprintf(" | cache:%d%%", cacheRatio)
-	if cacheRatio < 100 {
-		cachePart = fmt.Sprintf(" | %s", lipgloss.NewStyle().Foreground(Warning).Render(fmt.Sprintf("cache:%d%%", cacheRatio)))
-	}
-	status := fmt.Sprintf(" turn:%d | ctx:%d%%%s | $%.4f", m.currentTurn, ctxPct, cachePart, cost)
-	if m.sessionID != "" {
-		status += fmt.Sprintf(" | %s", truncateStr(m.sessionID, 12))
-	}
-	if m.running {
-		status = " ⏳" + status
-	}
-	statusLine := StatusBarStyle.Render(" " + status + " ")
-	bottom.WriteString(accentBar + statusLine)
+	bottom.WriteString(accentBar + sb.View())
 
 	return lipgloss.JoinVertical(lipgloss.Left, m.viewport.View(), bottom.String())
 }
