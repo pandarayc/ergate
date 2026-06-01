@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/engine"
 	"github.com/raydraw/ergate/internal/llm"
@@ -206,16 +207,18 @@ func convertMessages(msgs []llm.Message) []ChatMessage {
 // visualLineCount returns the number of visual lines when text is rendered at
 // the given width, accounting for both newline breaks, line wrapping, and
 // ANSI escape sequences (which don't occupy visible columns).
+// Uses ansi.Wordwrap to match prewrapContent's wrapping algorithm exactly,
+// avoiding cumulative positional drift between Widget Y and actual content.
 func visualLineCount(text string, width int) int {
 	width = max(width, 20)
 	count := 0
 	for _, line := range strings.Split(text, "\n") {
 		plain := stripAnsi(line)
-		runes := []rune(plain)
-		if len(runes) == 0 {
+		if len(plain) == 0 {
 			count++
 		} else {
-			count += (len(runes) + width - 1) / width
+			wrapped := ansi.Wordwrap(plain, width, " ")
+			count += strings.Count(wrapped, "\n") + 1
 		}
 	}
 	return count
