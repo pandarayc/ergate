@@ -363,25 +363,25 @@ func (m *ChatModel) handleCommand(input string) {
 		}
 	case "/load":
 		if m.sessionStore != nil && len(parts) > 1 {
-		sess, err := m.sessionStore.Load(parts[1])
-		if err == nil {
-			m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
-			m.messages = []ChatMessage{{Role: "system", Content: fmt.Sprintf("[Loaded: %s]", parts[1])}}
-			m.sessionID = parts[1]
-		} else {
-			m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("Load failed: %v", err)})
-		}
+			sess, err := m.sessionStore.Load(parts[1])
+			if err == nil {
+				m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
+				m.messages = []ChatMessage{{Role: "system", Content: fmt.Sprintf("[Loaded: %s]", parts[1])}}
+				m.sessionID = parts[1]
+			} else {
+				m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("Load failed: %v", err)})
+			}
 		}
 	case "/sessions":
 		if m.sessionStore != nil {
-		ids, _ := m.sessionStore.List()
-		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Sessions: %v", ids)})
+			ids, _ := m.sessionStore.List()
+			m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Sessions: %v", ids)})
 		}
 	case "/help":
-		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "/help /exit /clear /model /usage /config /save /load /sessions /cost /status"})
+		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "/help /exit /clear /model /usage /config /save /load /resume /sessions /cost /status"})
 	case "/model":
 		if len(parts) > 1 {
-		m.cfg.Model = parts[1]
+			m.cfg.Model = parts[1]
 		}
 		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Model: %s", m.cfg.Model)})
 	case "/usage":
