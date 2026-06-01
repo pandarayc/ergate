@@ -170,11 +170,11 @@ func (m *ChatModel) renderContent() string {
 		vis := visualLineCount(rendered, m.viewport.Width)
 
 		if msg.wasFolded && (msg.Role == "tool" || msg.Role == "thinking") {
-			// Fold bar is the last visual line of the rendered output.
+			// Widget covers the entire message area — clicking anywhere toggles.
 			m.layout.Content = append(m.layout.Content, Widget{
 				Kind:   WidgetMessage,
-				Y:      headerLines + y + vis - 1,
-				Height: 1,
+				Y:      headerLines + y,
+				Height: vis,
 				Index:  i,
 			})
 		}
