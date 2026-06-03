@@ -69,6 +69,14 @@ type ChatModel struct {
 	// This reduces viewport height. Modal overlays (detail) leave this at 0.
 	overlayHeight int
 
+	// hideThinking suppresses thinking output from being displayed.
+	// Toggled by /thinking command.
+	hideThinking bool
+
+	// showSessionPicker is set by -r when sessions exist. AppModel checks this
+	// flag to show OverlaySessionPicker before the chat becomes interactive.
+	showSessionPicker bool
+
 	// mouseDisabled is true after a drag event disabled mouse tracking.
 	// syncMouse re-enables it and resets this flag.
 	mouseDisabled bool
@@ -121,21 +129,10 @@ func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store, 
 		sessionStore: store,
 	}
 	if resume && store != nil {
-		if sess, err := store.Latest(); err == nil && sess != nil {
-			eng.ImportSession(engine.SessionData{
-				Messages: sess.Messages,
-				Usage:    sess.Usage,
-			})
-			m.sessionID = sess.ID
-			m.messages = append(m.messages, ChatMessage{
-				Role:    "system",
-				Content: fmt.Sprintf("[Restored session: %s — %d messages]", sess.ID, len(sess.Messages)),
-			})
-			m.messages = append(m.messages, convertMessages(eng.Messages())...)
-			m.forceScrollBottom = true
-			in, out := eng.TotalUsage()
-			m.totalInTokens = in
-			m.totalOutTokens = out
+		// If sessions exist, defer to the session picker overlay.
+		// If no sessions, start blank (nothing to pick from).
+		if sessions, err := store.List(); err == nil && len(sessions) > 0 {
+			m.showSessionPicker = true
 		}
 	}
 
@@ -281,6 +278,57 @@ func (m *ChatModel) saveSession() {
 	if err := m.sessionStore.Save(sess); err == nil {
 		m.sessionID = sess.ID
 	}
+}
+
+// loadSession loads a session by ID into the engine and chat display.
+func (m *ChatModel) loadSession(id string) {
+	if m.sessionStore == nil {
+		return
+	}
+	sess, err := m.sessionStore.Load(id)
+	if err != nil || sess == nil {
+		m.messages = append(m.messages, ChatMessage{Role: "error", Content: fmt.Sprintf("load session %s: %v", id, err)})
+		return
+	}
+	m.eng.ImportSession(engine.SessionData{
+		Messages: sess.Messages,
+		Usage:    sess.Usage,
+	})
+	m.sessionID = sess.ID
+	m.messages = append(m.messages, ChatMessage{
+		Role:    "system",
+		Content: fmt.Sprintf("[Restored session: %s — %d messages]", sess.ID, len(sess.Messages)),
+	})
+	m.messages = append(m.messages, convertMessages(m.eng.Messages())...)
+	m.forceScrollBottom = true
+	in, out := m.eng.TotalUsage()
+	m.totalInTokens = in
+	m.totalOutTokens = out
+}
+
+// loadSessionPickerData reads sessions from the store and returns picker items.
+func (m *ChatModel) loadSessionPickerData() []SessionItem {
+	if m.sessionStore == nil {
+		return nil
+	}
+	ids, err := m.sessionStore.List()
+	if err != nil {
+		return nil
+	}
+	var items []SessionItem
+	for _, id := range ids {
+		sess, err := m.sessionStore.Load(id)
+		if err != nil {
+			continue
+		}
+		items = append(items, SessionItem{
+			ID:           sess.ID,
+			UpdatedAt:    sess.UpdatedAt,
+			MessageCount: len(sess.Messages),
+			Model:        sess.Model,
+		})
+	}
+	return items
 }
 
 func estimateCost(model string, inTokens, outTokens int) float64 {

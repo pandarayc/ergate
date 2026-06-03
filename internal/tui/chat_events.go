@@ -377,8 +377,15 @@ func (m *ChatModel) handleCommand(input string) {
 			ids, _ := m.sessionStore.List()
 			m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Sessions: %v", ids)})
 		}
+	case "/thinking":
+		m.hideThinking = !m.hideThinking
+		state := "visible"
+		if m.hideThinking {
+			state = "hidden"
+		}
+		m.messages = append(m.messages, ChatMessage{Role: "system", Content: fmt.Sprintf("Thinking output: %s", state)})
 	case "/help":
-		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "/help /exit /clear /model /usage /config /save /load /resume /sessions /cost /status"})
+		m.messages = append(m.messages, ChatMessage{Role: "system", Content: "/help /exit /clear /model /usage /config /save /load /resume /sessions /cost /status /thinking"})
 	case "/model":
 		if len(parts) > 1 {
 			m.cfg.Model = parts[1]
@@ -424,6 +431,9 @@ func (m *ChatModel) handleEngineEvent(event engine.Event) {
 		m.currentTurn = event.Turn
 
 	case engine.EventThinking:
+		if m.hideThinking {
+			break
+		}
 		if text, ok := event.Data.(string); ok {
 		if m.coalesceDirty && m.coalesceRole != "thinking" {
 			m.flushCoalesced()
@@ -520,8 +530,10 @@ func (m *ChatModel) flushCoalesced() {
 
 // Tool output fold
 
-const maxToolOutputLines = 8
-const maxThinkingLines = 3
+// FIXME: folding temporarily disabled — set to very high values.
+// Proper fix should re-enable fold with config knob and fix hit-test bugs.
+const maxToolOutputLines = 9999
+const maxThinkingLines = 9999
 
 func foldToolOutput(content string, width int, maxLines int) (display string, collapsed bool, totalLines int) {
 	if maxLines <= 0 {

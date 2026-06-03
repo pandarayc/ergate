@@ -65,6 +65,11 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the full UI.
 func (m *AppModel) View() string {
+	// Check for pending session picker (from -r flag).
+	if m.chat.showSessionPicker && !m.overlay.IsActive() {
+		m.showSessionPickerOverlay()
+	}
+
 	// Set inline overlay height for chat layout.
 	if m.overlay.IsActive() && m.overlay.Active().Kind == OverlayPermission {
 		m.chat.SetOverlayHeight(8)
@@ -84,6 +89,10 @@ func (m *AppModel) View() string {
 			// Detail is a modal overlay.
 			detailView := renderDetailOverlay(m.overlay.Active(), m.width, m.height)
 			return lipgloss.JoinVertical(lipgloss.Left, m.chat.viewport.View(), detailView)
+		case OverlaySessionPicker:
+			// Full-screen blocking overlay for session selection.
+			pickerView := renderSessionPicker(m.overlay.Active(), m.width, m.height)
+			return lipgloss.JoinVertical(lipgloss.Left, m.chat.viewport.View(), pickerView)
 		}
 	}
 	return base
@@ -148,6 +157,22 @@ func (m AppModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 					o.DetailScroll--
 				}
 			}
+
+		case OverlaySessionPicker:
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.dismissSessionPicker()
+			case tea.KeyUp:
+				if o.SessionPickerCursor > 0 {
+					o.SessionPickerCursor--
+				}
+			case tea.KeyDown:
+				if o.SessionPickerCursor < len(o.SessionPickerItems)-1 {
+					o.SessionPickerCursor++
+				}
+			case tea.KeyEnter:
+				m.selectSessionFromPicker()
+			}
 		}
 	case tea.MouseMsg:
 		// Mouse events are blocked while overlay is active.
@@ -155,6 +180,39 @@ func (m AppModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return &m, nil
+}
+
+// showSessionPickerOverlay loads session data and activates the picker overlay.
+func (m *AppModel) showSessionPickerOverlay() {
+	items := m.chat.loadSessionPickerData()
+	if len(items) == 0 {
+		m.chat.showSessionPicker = false
+		return
+	}
+	m.overlay.Show(&Overlay{
+		Kind:               OverlaySessionPicker,
+		SessionPickerItems: items,
+		SessionPickerCursor: 0,
+		SessionPickerScroll: 0,
+	})
+}
+
+// dismissSessionPicker hides the overlay without loading a session.
+func (m *AppModel) dismissSessionPicker() {
+	m.chat.showSessionPicker = false
+	m.overlay.Hide()
+}
+
+// selectSessionFromPicker loads the highlighted session and dismisses the overlay.
+func (m *AppModel) selectSessionFromPicker() {
+	o := m.overlay.Active()
+	if o == nil || o.SessionPickerCursor >= len(o.SessionPickerItems) {
+		return
+	}
+	id := o.SessionPickerItems[o.SessionPickerCursor].ID
+	m.chat.showSessionPicker = false
+	m.overlay.Hide()
+	m.chat.loadSession(id)
 }
 
 // ShowOverlay activates an overlay.

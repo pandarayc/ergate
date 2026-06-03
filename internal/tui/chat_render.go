@@ -16,7 +16,7 @@ func (m *ChatModel) View() string {
 	// Header (fixed at top)
 	headerStyle := lipgloss.NewStyle().Foreground(Accent).Bold(true).Padding(0, 1)
 	b.WriteString(headerStyle.Render("Ergate"))
-	b.WriteString(lipgloss.NewStyle().Foreground(Muted).Render(fmt.Sprintf("  model: %s\n\n", m.cfg.Model)))
+	b.WriteString(lipgloss.NewStyle().Foreground(Muted).Width(m.viewport.Width).Render(fmt.Sprintf("  model: %s\n", m.cfg.Model)))
 
 	// Welcome page when no messages
 	if len(m.messages) == 0 {
@@ -134,8 +134,8 @@ func (m *ChatModel) View() string {
 // headerLines account for the Ergate title + model line rendered in View()
 // before renderContent output. Widget Y values must include this offset to
 // align with contentY = mouseY + YOffset (which is full-viewport-content-relative).
-// The header is " Ergate   model: xxx\n\n" → 1 text line + 2 empty lines = 3 lines.
-const headerLines = 3
+// The header is " Ergate   model: xxx\n" → 1 text line + 1 empty line = 2 lines.
+const headerLines = 2
 
 // renderContent builds the message viewport content from cached renders.
 // Only the last maxVisible messages are included.
@@ -236,6 +236,10 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 			result = s
 		}
 	case "thinking":
+		if m.hideThinking {
+			result = ""
+			break
+		}
 		_, overflow, total := foldToolOutput(msg.Content, contentW, maxThinkingLines)
 		if overflow && !msg.wasFolded {
 			msg.Collapsed = true

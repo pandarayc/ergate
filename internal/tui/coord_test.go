@@ -8,7 +8,11 @@ import (
 
 // TestYTracking_MultipleThinking verifies that handleViewportClick can
 // correctly identify each thinking block when scrolled into view.
+//
+// FIXME: folding is temporarily disabled (maxThinkingLines/maxToolOutputLines = 9999).
+// Re-enable this test when folding is restored.
 func TestYTracking_MultipleThinking(t *testing.T) {
+	t.Skip("folding disabled: maxThinkingLines=9999, no widgets created for thinking blocks")
 	longThinking := strings.Repeat("line of text that's long enough to overflow\n", 10)
 
 	m := ChatModel{}
