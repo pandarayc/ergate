@@ -90,6 +90,10 @@ type ToolConfig struct {
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+
+	// DeepSeek cache metrics (prompt_cache_hit_tokens / prompt_cache_miss_tokens).
+	CacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`
+	CacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 // StreamEvent is emitted during streaming.

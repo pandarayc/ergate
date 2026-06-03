@@ -117,14 +117,20 @@ func (m *ChatModel) View() string {
 
 	// Status bar
 	in, out := m.eng.TotalUsage()
+	cacheHit, cacheMiss := m.eng.CacheUsage()
+	modelOpts := m.cfg.ActiveModelOptions()
 	sb := StatusBar{
-		Turn:       m.currentTurn,
-		TotalIn:    in,
-		TotalOut:   out,
-		Model:      m.cfg.Model,
-		CacheRatio: m.eng.CacheRatio(),
-		SessionID:  m.sessionID,
-		Running:    m.running,
+		Turn:            m.currentTurn,
+		TotalIn:         in,
+		TotalOut:        out,
+		Model:           m.cfg.Model,
+		CacheRatio:      m.eng.CacheRatio(),
+		SessionID:       m.sessionID,
+		Running:         m.running,
+		CacheHitTokens:  cacheHit,
+		CacheMissTokens: cacheMiss,
+		ContextWindow:   modelOpts.ContextWindow,
+		ModelOpts:       modelOpts,
 	}
 	bottom.WriteString(accentBar + sb.View())
 

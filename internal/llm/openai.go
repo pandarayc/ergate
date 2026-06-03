@@ -87,6 +87,7 @@ func (c *OpenAIClient) Chat(ctx context.Context, req *ChatRequest) (*ChatRespons
 func (c *OpenAIClient) ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamEvent, error) {
 	reqBody := c.adapter.BuildRequestBody(req)
 	reqBody["stream"] = true
+	reqBody["stream_options"] = map[string]interface{}{"include_usage": true}
 
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -160,6 +161,23 @@ func (c *OpenAIClient) readSSEStream(ctx context.Context, body io.ReadCloser, ev
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
+		}
+
+		// Emit usage if present (last chunk when stream_options.include_usage=true).
+		if chunk.Usage != nil {
+			usageData := map[string]interface{}{
+				"delta": map[string]interface{}{
+					"stop_reason": "stop",
+				},
+				"usage": map[string]interface{}{
+					"input_tokens":              chunk.Usage.PromptTokens,
+					"output_tokens":             chunk.Usage.CompletionTokens,
+					"prompt_cache_hit_tokens":   chunk.Usage.PromptCacheHitTokens,
+					"prompt_cache_miss_tokens":  chunk.Usage.PromptCacheMissTokens,
+				},
+			}
+			raw, _ := json.Marshal(usageData)
+			events <- StreamEvent{Type: EventMessageDelta, Data: raw}
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -261,13 +279,16 @@ type openaiToolCallFunction struct {
 }
 
 type openaiUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
+	PromptCacheHitTokens    int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens   int `json:"prompt_cache_miss_tokens"`
 }
 
 type openaiStreamChunk struct {
 	Choices []openaiStreamChoice `json:"choices"`
+	Usage   *openaiUsage         `json:"usage,omitempty"` // present in last chunk when stream_options.include_usage=true
 }
 
 type openaiStreamChoice struct {
@@ -300,8 +321,10 @@ func (c *OpenAIClient) toChatResponse(resp *openaiChatResponse) *ChatResponse {
 		ID:    resp.ID,
 		Model: resp.Model,
 		Usage: Usage{
-			InputTokens:  resp.Usage.PromptTokens,
-			OutputTokens: resp.Usage.CompletionTokens,
+			InputTokens:     resp.Usage.PromptTokens,
+			OutputTokens:    resp.Usage.CompletionTokens,
+			CacheHitTokens:  resp.Usage.PromptCacheHitTokens,
+			CacheMissTokens: resp.Usage.PromptCacheMissTokens,
 		},
 	}
 

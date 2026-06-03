@@ -331,7 +331,14 @@ func (m *ChatModel) loadSessionPickerData() []SessionItem {
 	return items
 }
 
-func estimateCost(model string, inTokens, outTokens int) float64 {
+func estimateCost(model string, inTokens, outTokens int, opts ...config.ModelOptions) float64 {
+	// Use config-provided pricing if available.
+	if len(opts) > 0 && opts[0].CostPer1MIn > 0 {
+		o := opts[0]
+		return float64(inTokens)/1e6*o.CostPer1MIn + float64(outTokens)/1e6*o.CostPer1MOut
+	}
+
+	// Fallback to hardcoded rates.
 	rates := map[string]struct{ in, out float64 }{
 		"claude-sonnet-4-20250514": {3.0, 15.0},
 		"claude-opus-4-20250514":   {15.0, 75.0},

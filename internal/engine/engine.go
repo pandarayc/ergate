@@ -168,6 +168,13 @@ func (e *Engine) TotalUsage() (in, out int) {
 	return e.usage.InputTokens, e.usage.OutputTokens
 }
 
+// CacheUsage returns accumulated DeepSeek cache hit/miss tokens.
+func (e *Engine) CacheUsage() (hit, miss int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.usage.CacheHitTokens, e.usage.CacheMissTokens
+}
+
 // TodoItems returns a copy of the current todo list.
 func (e *Engine) TodoItems() []tool.TodoItem {
 	if e.todoMgr == nil {
@@ -343,14 +350,18 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 					StopReason string `json:"stop_reason"`
 				} `json:"delta"`
 				Usage struct {
-					InputTokens  int `json:"input_tokens"`
-					OutputTokens int `json:"output_tokens"`
+					InputTokens        int `json:"input_tokens"`
+					OutputTokens       int `json:"output_tokens"`
+					CacheHitTokens     int `json:"prompt_cache_hit_tokens"`
+					CacheMissTokens    int `json:"prompt_cache_miss_tokens"`
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(event.Data, &delta); err == nil {
 				e.mu.Lock()
 				e.usage.InputTokens += delta.Usage.InputTokens
 				e.usage.OutputTokens += delta.Usage.OutputTokens
+				e.usage.CacheHitTokens += delta.Usage.CacheHitTokens
+				e.usage.CacheMissTokens += delta.Usage.CacheMissTokens
 				e.mu.Unlock()
 			}
 

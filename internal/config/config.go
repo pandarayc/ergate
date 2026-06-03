@@ -37,6 +37,13 @@ const (
 type ModelOptions struct {
 	ReasoningEffort string `mapstructure:"reasoning_effort"` // DeepSeek R1: "" | "max" | "high" | ...
 	ThinkingBudget  int    `mapstructure:"thinking_budget"`  // Claude extended thinking tokens
+
+	// Model metadata (optional, for accurate metrics display)
+	ContextWindow    int     `mapstructure:"context_window"`     // max context tokens (e.g. 128000, 1000000)
+	CostPer1MIn      float64 `mapstructure:"cost_per_1m_in"`     // input cost per 1M tokens
+	CostPer1MOut     float64 `mapstructure:"cost_per_1m_out"`    // output cost per 1M tokens
+	CostPer1MInCached  float64 `mapstructure:"cost_per_1m_in_cached"`  // cached input cost per 1M tokens
+	CostPer1MOutCached float64 `mapstructure:"cost_per_1m_out_cached"` // cached output cost per 1M tokens
 }
 
 // ProviderConfig holds per-provider transport and model catalog.
