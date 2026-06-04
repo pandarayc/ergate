@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -279,9 +280,23 @@ func (m *ChatModel) renderMessage(msg *ChatMessage) string {
 	return result
 }
 
+// editInput mirrors the tool input for parsing Edit tool detail JSON.
+type editInput struct {
+	FilePath   string `json:"file_path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
+}
+
 // renderToolDetail renders tool detail with diff-style coloring.
 func renderToolDetail(toolLine, detail string) string {
 	if strings.Contains(toolLine, "Edit") || strings.Contains(toolLine, "edit") {
+		// Try to parse as JSON input; if that fails, fall back to line-level coloring.
+		var in editInput
+		if err := json.Unmarshal([]byte(detail), &in); err == nil && in.OldString != "" {
+			return renderEditDiff(in.FilePath, in.OldString, in.NewString)
+		}
+		// Fallback: color lines that look like unified diff output
 		var out strings.Builder
 		for _, line := range strings.Split(detail, "\n") {
 			trimmed := strings.TrimLeft(line, " \t")
@@ -299,6 +314,30 @@ func renderToolDetail(toolLine, detail string) string {
 		return strings.TrimRight(out.String(), "\n")
 	}
 	return truncateStr(detail, 100)
+}
+
+// renderEditDiff generates a colourised visual diff from old_string/new_string.
+func renderEditDiff(filePath, oldStr, newStr string) string {
+	var b strings.Builder
+
+	if filePath != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(Info).Bold(true).Render("─── " + filePath + " ───"))
+		b.WriteString("\n")
+	}
+
+	// Show removed lines (old_string) in red with "- " prefix.
+	for _, line := range strings.Split(oldStr, "\n") {
+		b.WriteString(DiffRemovedStyle.Render("- " + line))
+		b.WriteString("\n")
+	}
+
+	// Show added lines (new_string) in green with "+ " prefix.
+	for _, line := range strings.Split(newStr, "\n") {
+		b.WriteString(DiffAddedStyle.Render("+ " + line))
+		b.WriteString("\n")
+	}
+
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func truncateStr(s string, maxLen int) string {

@@ -50,6 +50,7 @@ func (m ChatModel) Update(msg tea.Msg) (ChatModel, tea.Cmd) {
 			in, out := m.eng.TotalUsage()
 			m.totalInTokens = in
 			m.totalOutTokens = out
+			m.saveSession()
 		}
 		if m.running {
 			cmds = append(cmds, m.listenEvents())
@@ -127,8 +128,8 @@ func (m *ChatModel) handleKeyMsg(msg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 			m.messages = append(m.messages, ChatMessage{Role: "system", Content: "[Interrupted]"})
 			return true, nil
 		}
-		m.saveSession()
-		return true, tea.Quit
+		// ESC no longer quits the program — only interrupts running tasks.
+		return true, nil
 
 	case tea.KeyCtrlJ:
 		if !m.running {
@@ -529,11 +530,8 @@ func (m *ChatModel) flushCoalesced() {
 }
 
 // Tool output fold
-
-// FIXME: folding temporarily disabled — set to very high values.
-// Proper fix should re-enable fold with config knob and fix hit-test bugs.
-const maxToolOutputLines = 9999
-const maxThinkingLines = 9999
+const maxToolOutputLines = 8
+const maxThinkingLines = 4
 
 func foldToolOutput(content string, width int, maxLines int) (display string, collapsed bool, totalLines int) {
 	if maxLines <= 0 {
