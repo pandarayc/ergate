@@ -133,12 +133,18 @@ func (c *Config) SubagentModelName() string {
 }
 
 // CompatProvider returns the protocol type to use for LLM client creation.
-// Falls back to api_provider if compat is not set in provider config.
+// If the provider name is registered directly (e.g. "deepseek", "openai", "anthropic"),
+// it returns that name. Otherwise it falls back to the compat field for protocol-override
+// scenarios (e.g. a proxy using the openai protocol).
 func (c *Config) CompatProvider() string {
+	name := string(c.APIProvider)
+	if llm.IsRegistered(name) {
+		return name
+	}
 	if pc := c.ActiveProviderConfig(); pc.Compat != "" {
 		return pc.Compat
 	}
-	return string(c.APIProvider)
+	return name
 }
 
 // Validate checks the configuration for errors.

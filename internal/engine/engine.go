@@ -69,6 +69,7 @@ type Engine struct {
 	cacheStability *cachestability.Manager
 	permCtx         tool.PermissionContext
 	transcriptDir string
+	compactFailures int // circuit breaker for AutoCompact
 }
 
 // Context holds the optional subsystems available to the engine.
@@ -168,7 +169,7 @@ func (e *Engine) TotalUsage() (in, out int) {
 	return e.usage.InputTokens, e.usage.OutputTokens
 }
 
-// CacheUsage returns accumulated DeepSeek cache hit/miss tokens.
+// CacheUsage returns accumulated provider cache hit/miss tokens.
 func (e *Engine) CacheUsage() (hit, miss int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -593,27 +594,49 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 		return
 	}
 
+	// Circuit breaker: stop retrying after N consecutive AutoCompact failures.
+	if e.compactFailures >= compact.MaxConsecutiveFailures {
+		return
+	}
+
+	// Dynamic threshold: 80% of context window, or default if unknown.
+	threshold := 0
+	opts := e.cfg.ActiveModelOptions()
+	if opts.ContextWindow > 0 {
+		threshold = opts.ContextWindow * 80 / 100
+	}
+
 	e.mu.Lock()
 	messages := make([]llm.Message, len(e.messages))
 	copy(messages, e.messages)
 	e.mu.Unlock()
 
-	if !compact.ShouldCompact(messages) {
+	// Layer 1: SnipCompact — clear old thinking/reasoning content.
+	// Zero API calls, prefix-safe (only clears text inside existing messages).
+	if _, saved := compact.SnipCompact(messages); saved > 0 {
+		e.logger.Debug("snip compact freed tokens", "tokens", saved)
+	}
+
+	if !compact.ShouldCompact(messages, threshold) {
+		e.mu.Lock()
+		e.messages = messages
+		e.mu.Unlock()
 		return
 	}
 
+	// Layer 2: AutoCompact — LLM summarization.
+	// This is the heavy layer: rewrites all messages, destroys prefix cache.
 	events <- Event{Type: EventThinking, Data: "Compacting context...", Turn: turn}
 
-	messages = compact.MicroCompact(messages)
-
-	if compact.ShouldCompact(messages) {
-		compacted, err := compact.AutoCompact(ctx, e.client, messages, e.cfg.Model)
-		if err != nil {
-			events <- Event{Type: EventError, Data: fmt.Errorf("compaction failed: %w", err)}
-			return
-		}
-		messages = compacted
+	compacted, err := compact.AutoCompact(ctx, e.client, messages, e.cfg.Model)
+	if err != nil {
+		e.compactFailures++
+		events <- Event{Type: EventError, Data: fmt.Errorf("compaction failed (%d/%d): %w",
+			e.compactFailures, compact.MaxConsecutiveFailures, err)}
+		return
 	}
+	messages = compacted
+	e.compactFailures = 0 // reset on success
 
 	e.mu.Lock()
 	e.messages = messages

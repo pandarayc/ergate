@@ -1,17 +1,22 @@
-package llm
+package provider
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
+
+	"github.com/raydraw/ergate/internal/llm"
 )
 
 const anthropicVersion = "2023-06-01"
 
-// AnthropicAdapter implements ProviderAdapter for the Anthropic Messages API.
+// AnthropicAdapter implements llm.ProviderAdapter for the Anthropic Messages API.
 type AnthropicAdapter struct{}
 
-func (AnthropicAdapter) BuildRequestBody(req *ChatRequest) map[string]interface{} {
+func (AnthropicAdapter) BuildRequestBody(req *llm.ChatRequest) map[string]interface{} {
 	apiReq := map[string]interface{}{
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
@@ -90,7 +95,7 @@ func anthropicSystemPrompt(prompt string) interface{} {
 	return blocks
 }
 
-func anthropicConvertContent(blocks []ContentBlock) interface{} {
+func anthropicConvertContent(blocks []llm.ContentBlock) interface{} {
 	if len(blocks) == 1 && blocks[0].Type == "text" {
 		return blocks[0].Text
 	}
@@ -128,7 +133,7 @@ func anthropicConvertContent(blocks []ContentBlock) interface{} {
 	return result
 }
 
-func (AnthropicAdapter) ParseErrorResponse(statusCode int, respBody, reqBody []byte) *APIError {
+func (AnthropicAdapter) ParseErrorResponse(statusCode int, respBody, reqBody []byte) *llm.APIError {
 	var errResp struct {
 		Error struct {
 			Type    string `json:"type"`
@@ -137,14 +142,14 @@ func (AnthropicAdapter) ParseErrorResponse(statusCode int, respBody, reqBody []b
 	}
 
 	if err := json.Unmarshal(respBody, &errResp); err == nil && errResp.Error.Message != "" {
-		return &APIError{
+		return &llm.APIError{
 			Type:    errResp.Error.Type,
 			Message: fmt.Sprintf("%s (req: %s)", errResp.Error.Message, truncateBytes(reqBody, 200)),
 			Status:  statusCode,
 		}
 	}
 
-	return &APIError{
+	return &llm.APIError{
 		Type:    fmt.Sprintf("http_%d", statusCode),
 		Message: fmt.Sprintf("HTTP %d: %s (req: %s)", statusCode, string(respBody), truncateBytes(reqBody, 200)),
 		Status:  statusCode,
@@ -161,18 +166,131 @@ func (AnthropicAdapter) Headers(apiKey string) map[string]string {
 
 func (AnthropicAdapter) Endpoint() string { return "/messages" }
 
-func (AnthropicAdapter) Features() FeatureSet {
-	return FeatureSet{
+func (AnthropicAdapter) Features() llm.FeatureSet {
+	return llm.FeatureSet{
 		SupportsThinking: true,
 		StreamProtocol:   "anthropic-sse",
 	}
 }
 
-func truncateBytes(b []byte, max int) string {
-	if len(b) <= max {
-		return string(b)
+// ParseStream implements the Anthropic SSE streaming protocol.
+func (AnthropicAdapter) ParseStream(ctx context.Context, body io.ReadCloser, events chan<- llm.StreamEvent) {
+	defer close(events)
+	defer body.Close()
+
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+
+	var currentEvent string
+	var currentData strings.Builder
+	var messageStopSeen bool
+	var inputJSON strings.Builder
+	var currentBlockType string
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			events <- llm.StreamEvent{Type: llm.EventError, Error: ctx.Err()}
+			return
+		default:
+		}
+
+		line := scanner.Text()
+
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			currentEvent = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "data: "):
+			currentData.WriteString(strings.TrimPrefix(line, "data: "))
+		case line == "":
+			if currentData.Len() == 0 {
+				continue
+			}
+
+			data := currentData.String()
+
+			switch currentEvent {
+			case "message_start":
+				var evt anthropicMessageStartEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					rawMsg, _ := json.Marshal(evt.Message)
+					events <- llm.StreamEvent{Type: llm.EventMessageStart, Data: rawMsg}
+				}
+			case "content_block_start":
+				var evt anthropicContentBlockStartEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					currentBlockType = evt.ContentBlock.Type
+					if evt.ContentBlock.Type == "tool_use" {
+						inputJSON.Reset()
+						raw, _ := json.Marshal(map[string]interface{}{
+							"id":    evt.ContentBlock.ID,
+							"name":  evt.ContentBlock.Name,
+							"index": evt.Index,
+						})
+						events <- llm.StreamEvent{Type: llm.EventToolUseStart, Data: raw}
+					}
+				}
+			case "content_block_delta":
+				var evt anthropicContentBlockDeltaEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					switch evt.Delta.Type {
+					case "text_delta":
+						raw, _ := json.Marshal(map[string]string{"text": evt.Delta.Text})
+						events <- llm.StreamEvent{Type: llm.EventText, Data: raw}
+					case "thinking_delta":
+						raw, _ := json.Marshal(map[string]string{"thinking": evt.Delta.Thinking})
+						events <- llm.StreamEvent{Type: llm.EventThinking, Data: raw}
+					case "input_json_delta":
+						inputJSON.WriteString(evt.Delta.PartialJSON)
+					}
+				}
+			case "content_block_stop":
+				var evt anthropicContentBlockStopEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					if currentBlockType == "tool_use" {
+						raw, _ := json.Marshal(map[string]interface{}{
+							"index": evt.Index,
+							"input": json.RawMessage(inputJSON.String()),
+						})
+						events <- llm.StreamEvent{Type: llm.EventToolUseEnd, Data: raw}
+					}
+				}
+			case "message_delta":
+				messageStopSeen = true
+				var evt anthropicMessageDeltaEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					raw, _ := json.Marshal(evt)
+					events <- llm.StreamEvent{Type: llm.EventMessageDelta, Data: raw}
+				}
+			case "message_stop":
+				if !messageStopSeen {
+					events <- llm.StreamEvent{Type: llm.EventDone, Data: json.RawMessage(`{"stop_reason": "end_turn"}`)}
+				}
+			case "error":
+				var evt anthropicErrorEvent
+				if err := json.Unmarshal([]byte(data), &evt); err == nil {
+					events <- llm.StreamEvent{Type: llm.EventError,
+						Error: &llm.APIError{
+							Type:    evt.Error.Type,
+							Message: evt.Error.Message,
+							Status:  respStatus(evt.Error.Type),
+						},
+					}
+				}
+			case "ping":
+			}
+
+			currentEvent = ""
+			currentData.Reset()
+		}
 	}
-	return string(b[:max]) + "..."
+
+	if err := scanner.Err(); err != nil {
+		events <- llm.StreamEvent{Type: llm.EventError, Error: fmt.Errorf("scan stream: %w", err)}
+		return
+	}
+
+	events <- llm.StreamEvent{Type: llm.EventDone, Data: json.RawMessage(`{"stop_reason": "end_turn"}`)}
 }
 
 // --- Anthropic API types ---
@@ -237,20 +355,20 @@ type anthropicErrorEvent struct {
 	} `json:"error"`
 }
 
-func toChatResponse(resp *anthropicResponse) *ChatResponse {
-	result := &ChatResponse{
+func anthropicToChatResponse(resp *anthropicResponse) *llm.ChatResponse {
+	result := &llm.ChatResponse{
 		ID:         resp.ID,
 		Model:      resp.Model,
 		StopReason: resp.StopReason,
-		Usage: Usage{
+		Usage: llm.Usage{
 			InputTokens:  resp.Usage.InputTokens,
 			OutputTokens: resp.Usage.OutputTokens,
 		},
 	}
 
-	var blocks []ContentBlock
+	var blocks []llm.ContentBlock
 	for _, content := range resp.Content {
-		block := ContentBlock{Type: content.Type}
+		block := llm.ContentBlock{Type: content.Type}
 		switch content.Type {
 		case "text":
 			block.Text = content.Text
@@ -262,7 +380,7 @@ func toChatResponse(resp *anthropicResponse) *ChatResponse {
 		blocks = append(blocks, block)
 	}
 
-	result.Messages = []Message{{Role: "assistant", Content: blocks}}
+	result.Messages = []llm.Message{{Role: "assistant", Content: blocks}}
 	return result
 }
 
@@ -286,4 +404,4 @@ func respStatus(errType string) int {
 }
 
 // Verify interface compliance at compile time.
-var _ ProviderAdapter = AnthropicAdapter{}
+var _ llm.ProviderAdapter = AnthropicAdapter{}

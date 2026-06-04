@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	_ "github.com/raydraw/ergate/internal/llm/provider" // register providers for Validate
 )
 
 func TestDefaultConfig(t *testing.T) {

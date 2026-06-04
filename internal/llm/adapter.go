@@ -1,7 +1,12 @@
 package llm
 
+import (
+	"context"
+	"io"
+)
+
 // ProviderAdapter abstracts provider-specific message formatting, error parsing,
-// HTTP headers, and feature flags. Each provider implements this once.
+// HTTP headers, feature flags, and SSE stream parsing. Each provider implements this once.
 type ProviderAdapter interface {
 	// BuildRequestBody converts a generic ChatRequest to the provider's API request format.
 	BuildRequestBody(req *ChatRequest) map[string]interface{}
@@ -18,6 +23,11 @@ type ProviderAdapter interface {
 
 	// Features returns the capability set for this provider.
 	Features() FeatureSet
+
+	// ParseStream reads a streaming SSE response body and emits StreamEvents.
+	// The implementation owns the body lifecycle — it must close body on return.
+	// It must close the events channel on return.
+	ParseStream(ctx context.Context, body io.ReadCloser, events chan<- StreamEvent)
 }
 
 // FeatureSet declares provider capabilities used by the engine and TUI

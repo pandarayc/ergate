@@ -74,8 +74,8 @@ type ContentBlock struct {
 	Content    json.RawMessage `json:"content,omitempty"`
 	IsError    bool            `json:"is_error,omitempty"`
 	ToolUseID  string          `json:"tool_use_id,omitempty"`
-	Thinking   string          `json:"thinking,omitempty"`           // Claude extended thinking
-	Reasoning  string          `json:"reasoning_content,omitempty"`  // DeepSeek R1
+	Thinking   string          `json:"thinking,omitempty"`           // extended thinking (Claude)
+	Reasoning  string          `json:"reasoning_content,omitempty"`  // reasoning chain (e.g. DeepSeek R1)
 	Citations  interface{}     `json:"citations,omitempty"`           // references
 }
 
@@ -91,7 +91,7 @@ type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 
-	// DeepSeek cache metrics (prompt_cache_hit_tokens / prompt_cache_miss_tokens).
+	// Provider-specific cache metrics (e.g. prompt_cache_hit_tokens / prompt_cache_miss_tokens).
 	CacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`
 	CacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
 }

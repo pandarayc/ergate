@@ -12,6 +12,7 @@ import (
 	"github.com/raydraw/ergate/internal/filehistory"
 	"github.com/raydraw/ergate/internal/hooks"
 	"github.com/raydraw/ergate/internal/llm"
+	_ "github.com/raydraw/ergate/internal/llm/provider" // register all providers
 	"github.com/raydraw/ergate/internal/mcp"
 	"github.com/raydraw/ergate/internal/planmode"
 	"github.com/raydraw/ergate/internal/worktree"
