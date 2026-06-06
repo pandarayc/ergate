@@ -21,6 +21,10 @@ type StatusBar struct {
 	CacheHitTokens  int
 	CacheMissTokens int
 
+	// Last turn timing
+	LastLatencyMS int64
+	LastTTFTMS    int64
+
 	// Model metadata from config
 	ContextWindow int // 0 = use default 128000
 	ModelOpts     config.ModelOptions
@@ -62,7 +66,11 @@ func (s StatusBar) View() string {
 		))
 	}
 
-	status := fmt.Sprintf(" turn:%d | ctx:%d%%%s | $%.4f", s.Turn, ctxPct, cachePart, cost)
+	status := fmt.Sprintf(" turn:%d | ctx:%d%%%s", s.Turn, ctxPct, cachePart)
+	if s.LastLatencyMS > 0 {
+		status += fmt.Sprintf(" | %.1fs", float64(s.LastLatencyMS)/1000)
+	}
+	status += fmt.Sprintf(" | $%.4f", cost)
 	if s.SessionID != "" {
 		status += fmt.Sprintf(" | %s", truncateStr(s.SessionID, 12))
 	}

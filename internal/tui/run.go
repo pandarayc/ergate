@@ -10,7 +10,7 @@ import (
 // Run starts the bubbletea TUI.
 func Run(cfg *config.Config, eng *engine.Engine, resume bool) error {
 	store, _ := session.NewStore(cfg.SessionDir)
-	chat := NewChatModel(cfg, eng, store, resume)
+	chat := NewAppModelV2(cfg, eng, store, resume)
 	app := NewAppModel(chat)
 	p := tea.NewProgram(&app, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
