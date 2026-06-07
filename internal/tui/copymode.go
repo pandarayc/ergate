@@ -62,13 +62,14 @@ func (cm *CopyMode) Finish() string {
 }
 
 // Cancel aborts copy mode and clears any settled highlight.
+// Does NOT clear wrappedLines or contentLines — those are content cache,
+// not selection state. Clearing them causes the next copy to fail when
+// viewDirty is false (SetContent won't be called to repopulate).
 func (cm *CopyMode) Cancel() {
 	cm.active = false
 	cm.settled = false
 	cm.anchorX, cm.anchorY = 0, 0
 	cm.focusX, cm.focusY = -1, -1
-	cm.wrappedLines = nil
-	cm.contentLines = 0
 }
 
 // IsActive returns true if copy mode is active (dragging or settled).
@@ -96,6 +97,7 @@ func (cm *CopyMode) selectedRange() (sx, sy, ex, ey int) {
 func (cm *CopyMode) SetContent(content string) {
 	cm.wrappedLines = strings.Split(content, "\n")
 	if cm.settled && len(cm.wrappedLines) != cm.contentLines {
+		cm.contentLines = len(cm.wrappedLines)
 		cm.Cancel()
 		return
 	}

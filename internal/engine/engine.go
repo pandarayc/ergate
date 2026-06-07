@@ -21,6 +21,7 @@ import (
 	"github.com/raydraw/ergate/internal/planmode"
 	"github.com/raydraw/ergate/internal/memory"
 	"github.com/raydraw/ergate/internal/prompt"
+	"github.com/raydraw/ergate/internal/session"
 	"github.com/raydraw/ergate/internal/skill"
 	"github.com/raydraw/ergate/internal/task"
 	"github.com/raydraw/ergate/internal/tool"
@@ -37,14 +38,15 @@ type Event struct {
 type EventType string
 
 const (
-	EventText       EventType = "text"
-	EventThinking   EventType = "thinking"
-	EventToolUse    EventType = "tool_use"
-	EventToolResult EventType = "tool_result"
-	EventError      EventType = "error"
-	EventTurnEnd    EventType = "turn_end"
-	EventDone       EventType = "done"
-	EventAborted    EventType = "aborted"
+	EventText        EventType = "text"
+	EventThinking    EventType = "thinking"
+	EventTodoReminder EventType = "todo_reminder"
+	EventToolUse     EventType = "tool_use"
+	EventToolResult  EventType = "tool_result"
+	EventError       EventType = "error"
+	EventTurnEnd     EventType = "turn_end"
+	EventDone        EventType = "done"
+	EventAborted     EventType = "aborted"
 )
 
 // Engine is the core query processing loop.
@@ -58,6 +60,7 @@ type Engine struct {
 	mu          sync.Mutex
 	messages    []llm.Message
 	usage       llm.Usage
+	turns       []session.TurnMetrics
 	memEntries  []memory.Entry
 	agentEntry  *memory.Entry
 	skillReg    *skill.Registry
@@ -246,7 +249,7 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 		if e.todoMgr != nil {
 			e.todoMgr.BumpRound()
 			if e.todoMgr.ShouldRemind() {
-				events <- Event{Type: EventThinking, Data: e.todoMgr.ReminderText(), Turn: turn}
+				events <- Event{Type: EventTodoReminder, Data: e.todoMgr.ReminderText(), Turn: turn}
 			}
 		}
 
@@ -262,6 +265,14 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) (hasTools bool, err error) {
 	req := e.buildRequest()
 
+	// Per-turn metrics
+	tm := session.TurnMetrics{
+		Turn:      turn,
+		Model:     req.Model,
+		StartedAt: time.Now(),
+	}
+	var ttftRecorded bool
+
 	stream, err := llm.RetryWithBackoff(ctx, 3,
 		func() (<-chan llm.StreamEvent, error) {
 			return e.client.ChatStream(ctx, req)
@@ -274,6 +285,10 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 		},
 	)
 	if err != nil {
+		tm.LatencyMS = time.Since(tm.StartedAt).Milliseconds()
+		e.mu.Lock()
+		e.turns = append(e.turns, tm)
+		e.mu.Unlock()
 		events <- Event{Type: EventError, Data: fmt.Errorf("API call: %w", err)}
 		return false, fmt.Errorf("chat stream: %w", err)
 	}
@@ -292,6 +307,10 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 			return false, event.Error
 
 		case llm.EventText:
+			if !ttftRecorded {
+				tm.TTFTMS = time.Since(tm.StartedAt).Milliseconds()
+				ttftRecorded = true
+			}
 			var textData struct {
 				Text string `json:"text"`
 			}
@@ -301,6 +320,10 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 			}
 
 		case llm.EventThinking:
+			if !ttftRecorded {
+				tm.TTFTMS = time.Since(tm.StartedAt).Milliseconds()
+				ttftRecorded = true
+			}
 			var thinkData struct {
 				Thinking string `json:"thinking"`
 			}
@@ -358,6 +381,10 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 				} `json:"usage"`
 			}
 			if err := json.Unmarshal(event.Data, &delta); err == nil {
+				tm.TokensIn += delta.Usage.InputTokens
+				tm.TokensOut += delta.Usage.OutputTokens
+				tm.CacheHitTokens += delta.Usage.CacheHitTokens
+				tm.CacheMissTokens += delta.Usage.CacheMissTokens
 				e.mu.Lock()
 				e.usage.InputTokens += delta.Usage.InputTokens
 				e.usage.OutputTokens += delta.Usage.OutputTokens
@@ -376,11 +403,20 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 	e.mu.Unlock()
 
 	if len(toolUseBlocks) == 0 {
+		tm.LatencyMS = time.Since(tm.StartedAt).Milliseconds()
+		e.mu.Lock()
+		e.turns = append(e.turns, tm)
+		e.mu.Unlock()
 		events <- Event{Type: EventDone, Data: textBuf.String()}
 		return false, nil
 	}
 
+	tm.ToolsRan = len(toolUseBlocks)
 	e.executeTools(ctx, toolUseBlocks, events, turn)
+	tm.LatencyMS = time.Since(tm.StartedAt).Milliseconds()
+	e.mu.Lock()
+	e.turns = append(e.turns, tm)
+	e.mu.Unlock()
 	return true, nil
 }
 
@@ -769,9 +805,10 @@ func (e *Engine) safeExecute(ctx context.Context, t tool.Tool, input json.RawMes
 
 // SessionData is the serializable engine state for persistence.
 type SessionData struct {
-	Messages  []llm.Message
-	Usage     llm.Usage
-	CreatedAt time.Time
+	Messages  []llm.Message         `json:"messages"`
+	Usage     llm.Usage             `json:"usage"`
+	Turns     []session.TurnMetrics `json:"turns,omitempty"`
+	CreatedAt time.Time             `json:"-"`
 }
 
 // ExportSession returns a snapshot of the current conversation.
@@ -780,9 +817,12 @@ func (e *Engine) ExportSession() SessionData {
 	defer e.mu.Unlock()
 	msgs := make([]llm.Message, len(e.messages))
 	copy(msgs, e.messages)
+	turns := make([]session.TurnMetrics, len(e.turns))
+	copy(turns, e.turns)
 	return SessionData{
 		Messages:  msgs,
 		Usage:     e.usage,
+		Turns:     turns,
 		CreatedAt: time.Now(),
 	}
 }
@@ -794,6 +834,17 @@ func (e *Engine) ImportSession(data SessionData) {
 	e.messages = make([]llm.Message, len(data.Messages))
 	copy(e.messages, data.Messages)
 	e.usage = data.Usage
+	e.turns = make([]session.TurnMetrics, len(data.Turns))
+	copy(e.turns, data.Turns)
+}
+
+// TurnMetrics returns a copy of per-turn metrics.
+func (e *Engine) TurnMetrics() []session.TurnMetrics {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]session.TurnMetrics, len(e.turns))
+	copy(out, e.turns)
+	return out
 }
 
 const maxResultChars = 20_000

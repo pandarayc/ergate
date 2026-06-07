@@ -12,6 +12,21 @@ import (
 	"github.com/raydraw/ergate/internal/llm"
 )
 
+// TurnMetrics records per-turn timing and token data.
+type TurnMetrics struct {
+	Turn            int           `json:"turn"`
+	Model           string        `json:"model"`
+	LatencyMS       int64         `json:"latency_ms"`
+	TTFTMS          int64         `json:"ttft_ms"`
+	TokensIn        int           `json:"tokens_in"`
+	TokensOut       int           `json:"tokens_out"`
+	CacheHitTokens  int           `json:"cache_hit_tokens"`
+	CacheMissTokens int           `json:"cache_miss_tokens"`
+	ToolsRan        int           `json:"tools_ran"`
+	Compacted       bool          `json:"compacted"`
+	StartedAt       time.Time     `json:"started_at"`
+}
+
 // Session holds a saved conversation.
 type Session struct {
 	ID        string        `json:"id"`
@@ -20,6 +35,20 @@ type Session struct {
 	Model     string        `json:"model"`
 	Messages  []llm.Message `json:"messages"`
 	Usage     llm.Usage     `json:"usage"`
+	Turns     []TurnMetrics `json:"turns,omitempty"`
+}
+
+// AddTurn appends a turn metric to the session.
+func (s *Session) AddTurn(m TurnMetrics) {
+	s.Turns = append(s.Turns, m)
+}
+
+// LastTurn returns the most recent turn metrics, or nil.
+func (s *Session) LastTurn() *TurnMetrics {
+	if len(s.Turns) == 0 {
+		return nil
+	}
+	return &s.Turns[len(s.Turns)-1]
 }
 
 // Store persists sessions as JSON files.
@@ -134,4 +163,15 @@ func (s *Store) Delete(id string) error {
 		return err
 	}
 	return nil
+}
+
+// Prune keeps the most recent N sessions and deletes the rest.
+func (s *Store) Prune(keep int) {
+	ids, err := s.List()
+	if err != nil || len(ids) <= keep {
+		return
+	}
+	for _, id := range ids[keep:] {
+		_ = s.Delete(id)
+	}
 }

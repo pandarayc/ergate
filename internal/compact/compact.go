@@ -10,10 +10,15 @@ import (
 )
 
 const (
-	// Threshold triggers auto-compaction (in estimated tokens).
-	Threshold = 30_000
+	// DefaultThreshold is the fallback compaction threshold (in estimated tokens).
+	// When the model's ContextWindow is known, use ContextWindow * 0.8 instead.
+	DefaultThreshold = 30_000
 	// KeepRecent is the number of recent tool result messages to preserve.
 	KeepRecent = 3
+	// SnipKeepRecent is the number of recent thinking blocks to preserve.
+	SnipKeepRecent = 2
+	// MaxConsecutiveFailures is the circuit breaker limit for AutoCompact.
+	MaxConsecutiveFailures = 3
 )
 
 // EstimateTokens uses a heuristic of ~4 chars per token.
@@ -22,9 +27,45 @@ func EstimateTokens(messages []llm.Message) int {
 	return len(raw) / 4
 }
 
-// ShouldCompact returns true when estimated tokens exceed the threshold.
-func ShouldCompact(messages []llm.Message) bool {
-	return EstimateTokens(messages) > Threshold
+// ShouldCompact returns true when estimated tokens exceed the given threshold.
+// Pass 0 to use DefaultThreshold.
+func ShouldCompact(messages []llm.Message, threshold int) bool {
+	if threshold <= 0 {
+		threshold = DefaultThreshold
+	}
+	return EstimateTokens(messages) > threshold
+}
+
+// SnipCompact clears old thinking/reasoning content from assistant messages.
+// This is the lightest compaction layer — zero API calls, minimal side effects.
+// Keeps the most recent SnipKeepRecent thinking blocks intact.
+func SnipCompact(msgs []llm.Message) ([]llm.Message, int) {
+	var thinkingIdx []int
+	for i, m := range msgs {
+		if m.Role == "assistant" {
+			for _, b := range m.Content {
+				if b.Type == "thinking" && len(b.Thinking) > 200 {
+					thinkingIdx = append(thinkingIdx, i)
+					break
+				}
+			}
+		}
+	}
+
+	if len(thinkingIdx) <= SnipKeepRecent {
+		return msgs, 0
+	}
+
+	tokensSaved := 0
+	for _, idx := range thinkingIdx[:len(thinkingIdx)-SnipKeepRecent] {
+		for j := range msgs[idx].Content {
+			if msgs[idx].Content[j].Type == "thinking" && len(msgs[idx].Content[j].Thinking) > 200 {
+				tokensSaved += len(msgs[idx].Content[j].Thinking) / 4
+				msgs[idx].Content[j].Thinking = "[thinking cleared]"
+			}
+		}
+	}
+	return msgs, tokensSaved
 }
 
 // MicroCompact replaces old tool result content with "[cleared]" to save tokens.

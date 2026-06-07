@@ -304,6 +304,14 @@ func (m *AppModelV2) View() string {
 		m.showSessionPicker()
 	}
 
+	// Scroll to bottom before rendering so the cached content matches
+	// the visible scroll position. Must happen before msgList.Render().
+	if m.forceScrollBottom && len(m.messages) > 0 {
+		m.msgList.ScrollToBottom()
+		m.forceScrollBottom = false
+		m.viewDirty = true
+	}
+
 	var b strings.Builder
 
 	// Header.
@@ -349,11 +357,6 @@ func (m *AppModelV2) View() string {
 	wrapped := m.cachedWrapped
 	if m.copyMode.IsActive() {
 		wrapped = m.copyMode.Highlight(wrapped)
-	}
-
-	if m.forceScrollBottom {
-		m.msgList.ScrollToBottom()
-		m.forceScrollBottom = false
 	}
 
 	// Footer.
