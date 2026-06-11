@@ -1,7 +1,5 @@
 package tui
 
-import "time"
-
 // OverlayKind identifies the active overlay type.
 // Only one flow-scoped overlay can be active at a time.
 type OverlayKind int
@@ -9,21 +7,12 @@ type OverlayKind int
 const (
 	OverlayPermission OverlayKind = iota
 	OverlayDetail
-	OverlaySessionPicker
 )
 
 // DetailMatch is a search result within detail content.
 type DetailMatch struct {
 	Line int    // 0-based line index in content
 	Text string // the matching line text (truncated for display)
-}
-
-// SessionItem holds session metadata for the picker list.
-type SessionItem struct {
-	ID           string
-	UpdatedAt    time.Time
-	MessageCount int
-	Model        string
 }
 
 // OverlayManager manages a single-layer overlay stack.
@@ -57,12 +46,12 @@ func (om *OverlayManager) Active() *Overlay {
 type Overlay struct {
 	Kind OverlayKind
 
-	// Permission dialog
+	// Permission dialog.
 	ToolName string
 	Summary  string
 	Selected int
 
-	// Detail view (OverlayDetail)
+	// Detail view (OverlayDetail).
 	DetailTitle      string        // dialog title (e.g. tool name)
 	DetailContent    string        // full content to display
 	DetailScroll     int           // content scroll line offset
@@ -71,9 +60,4 @@ type Overlay struct {
 	DetailMatches    []DetailMatch // fuzzy match results
 	DetailMatchIdx   int           // selected match in dropdown (0 = first)
 	DetailMatchOff   int           // dropdown scroll offset
-
-	// Session picker (OverlaySessionPicker)
-	SessionPickerItems  []SessionItem // session list
-	SessionPickerCursor int           // cursor index
-	SessionPickerScroll int           // list scroll offset
 }

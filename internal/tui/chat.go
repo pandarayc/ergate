@@ -15,9 +15,8 @@ import (
 	"github.com/raydraw/ergate/internal/tui/message"
 )
 
-// AppModelV2 is the new TUI model using list.List + message.ChatMessage.
-// It replaces the viewport.Model + WidgetLayout architecture.
-type AppModelV2 struct {
+// ChatModel is the TUI chat model using list.List + message.ChatMessage.
+type ChatModel struct {
 	cfg *config.Config
 	eng *engine.Engine
 
@@ -52,8 +51,7 @@ type AppModelV2 struct {
 	sessionID    string
 
 	// Overlay support — reuses existing OverlayManager from overlay.go.
-	overlays             OverlayManager
-	pendingSessionPicker bool // set by NewAppModelV2 when -r flag is used
+	overlays OverlayManager
 
 	// Spinner.
 	spinnerIdx int
@@ -66,13 +64,12 @@ type AppModelV2 struct {
 	cachedWrapped string
 }
 
-// NewAppModelV2 creates the new-style application model.
-// If resume is true and sessions exist, the session picker will be shown on first render.
-func NewAppModelV2(cfg *config.Config, eng *engine.Engine, store *session.Store, resume bool) *AppModelV2 {
+// NewChatModel creates a new chat model.
+func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store) *ChatModel {
 	engineDone := make(chan struct{})
 	close(engineDone)
 
-	m := &AppModelV2{
+	return &ChatModel{
 		cfg:          cfg,
 		eng:          eng,
 		msgList:      list.New(80, 20),
@@ -83,19 +80,10 @@ func NewAppModelV2(cfg *config.Config, eng *engine.Engine, store *session.Store,
 		stream:       message.NewStreamBuffer(),
 		sessionStore: store,
 	}
-
-	if resume && store != nil {
-		if sessions, err := store.List(); err == nil && len(sessions) > 0 {
-			// Defer picker to first View() call when dimensions are known.
-			m.pendingSessionPicker = true
-		}
-	}
-
-	return m
 }
 
 // Init initializes the model.
-func (m *AppModelV2) Init() tea.Cmd {
+func (m *ChatModel) Init() tea.Cmd {
 	return tea.Batch(
 		nextSpinnerTick(),
 		m.input.Blink(),
@@ -103,7 +91,7 @@ func (m *AppModelV2) Init() tea.Cmd {
 }
 
 // Update routes messages and handles user input.
-func (m *AppModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// WindowSize always handled.
 	if wsm, ok := msg.(tea.WindowSizeMsg); ok {
 		m.width = wsm.Width
@@ -155,7 +143,7 @@ func (m *AppModelV2) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // handleOverlayEvent routes keyboard events to the active overlay.
-func (m *AppModelV2) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	o := m.overlays.Active()
 	if o == nil {
 		return m, nil
@@ -199,19 +187,6 @@ func (m *AppModelV2) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 				o.DetailMatchIdx = 0
 				o.DetailMatchOff = 0
 			}
-		case OverlaySessionPicker:
-			if msg.Type == tea.KeyEsc {
-				m.dismissSessionPicker()
-			}
-			if o.SessionPickerCursor > 0 && msg.Type == tea.KeyUp {
-				o.SessionPickerCursor--
-			}
-			if o.SessionPickerCursor < len(o.SessionPickerItems)-1 && msg.Type == tea.KeyDown {
-				o.SessionPickerCursor++
-			}
-			if msg.Type == tea.KeyEnter {
-				m.selectSessionFromPicker()
-			}
 		}
 	case tea.MouseMsg:
 		return m, nil // mouse blocked during overlay
@@ -219,62 +194,19 @@ func (m *AppModelV2) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// showSessionPicker displays the session picker overlay on startup.
-func (m *AppModelV2) showSessionPicker() {
-	items := m.loadSessionPickerData()
-	if len(items) == 0 {
-		return
-	}
-	m.overlays.Show(&Overlay{
-		Kind:               OverlaySessionPicker,
-		SessionPickerItems: items,
-		SessionPickerCursor: 0,
-		SessionPickerScroll: 0,
-	})
-}
 
-// dismissSessionPicker hides the session picker overlay.
-func (m *AppModelV2) dismissSessionPicker() {
-	m.overlays.Hide()
-}
 
-// selectSessionFromPicker loads the selected session and hides the picker.
-func (m *AppModelV2) selectSessionFromPicker() {
-	o := m.overlays.Active()
-	if o == nil || o.SessionPickerCursor >= len(o.SessionPickerItems) {
-		return
-	}
-	m.loadSession(o.SessionPickerItems[o.SessionPickerCursor].ID)
-	m.overlays.Hide()
-}
 
-// loadSessionPickerData returns session items for the picker.
-func (m *AppModelV2) loadSessionPickerData() []SessionItem {
-	if m.sessionStore == nil {
-		return nil
-	}
-	ids, err := m.sessionStore.List()
-	if err != nil {
-		return nil
-	}
-	var items []SessionItem
-	for _, id := range ids {
-		sess, err := m.sessionStore.Load(id)
-		if err != nil {
-			continue
-		}
-		items = append(items, SessionItem{
-			ID:           sess.ID,
-			UpdatedAt:    sess.UpdatedAt,
-			MessageCount: len(sess.Messages),
-			Model:        sess.Model,
-		})
-	}
-	return items
-}
 
-// loadSession loads a session by ID.
-func (m *AppModelV2) loadSession(id string) {
+
+
+
+
+
+
+// LoadSession loads a session by ID, clearing the current chat state
+// and importing the session into the engine.
+func (m *ChatModel) LoadSession(id string) {
 	if m.sessionStore == nil {
 		return
 	}
@@ -283,13 +215,16 @@ func (m *AppModelV2) loadSession(id string) {
 		m.appendMessage(message.New("error", fmt.Sprintf("load session %s: %v", id, err)))
 		return
 	}
+	// Clear current chat state before importing.
+	m.messages = nil
+	m.msgList.SetItems(nil)
 	m.eng.ImportSession(engine.SessionData{
 		Messages: sess.Messages,
 		Usage:    sess.Usage,
 	})
 	m.sessionID = sess.ID
 	m.appendMessage(message.New("system",
-		fmt.Sprintf("[Restored session: %s — %d messages]", sess.ID, len(sess.Messages))))
+		fmt.Sprintf("[Restored session: %s \u2014 %d messages]", sess.ID, len(sess.Messages))))
 	for _, msg := range m.eng.Messages() {
 		m.appendConvertedMessages(msg)
 	}
@@ -297,13 +232,7 @@ func (m *AppModelV2) loadSession(id string) {
 }
 
 // View renders the full TUI.
-func (m *AppModelV2) View() string {
-	// Show pending session picker (from -r flag).
-	if m.pendingSessionPicker && !m.overlays.IsActive() {
-		m.pendingSessionPicker = false
-		m.showSessionPicker()
-	}
-
+func (m *ChatModel) View() string {
 	// Scroll to bottom before rendering so the cached content matches
 	// the visible scroll position. Must happen before msgList.Render().
 	if m.forceScrollBottom && len(m.messages) > 0 {
@@ -407,9 +336,6 @@ func (m *AppModelV2) View() string {
 		case OverlayDetail:
 			detailView := renderDetailOverlay(o, m.width, m.height)
 			return lipgloss.JoinVertical(lipgloss.Left, wrapped, detailView)
-		case OverlaySessionPicker:
-			pickerView := renderSessionPicker(o, m.width, m.height)
-			return lipgloss.JoinVertical(lipgloss.Left, wrapped, pickerView)
 		}
 	}
 
@@ -417,7 +343,7 @@ func (m *AppModelV2) View() string {
 }
 
 // welcomeView renders the initial welcome screen.
-func (m *AppModelV2) welcomeView() string {
+func (m *ChatModel) welcomeView() string {
 	return lipgloss.NewStyle().Foreground(Muted).Padding(1).Render(
 		"Welcome to Ergate!\n\n" +
 			"  Ctrl+C  Quit\n" +
@@ -430,7 +356,7 @@ func (m *AppModelV2) welcomeView() string {
 }
 
 // viewportHeight calculates the visible area for the message list.
-func (m *AppModelV2) viewportHeight() int {
+func (m *ChatModel) viewportHeight() int {
 	if m.height == 0 {
 		return 20
 	}
@@ -447,7 +373,7 @@ func (m *AppModelV2) viewportHeight() int {
 }
 
 // overlayReservedHeight returns the number of rows reserved for an inline overlay.
-func (m *AppModelV2) overlayReservedHeight() int {
+func (m *ChatModel) overlayReservedHeight() int {
 	if !m.overlays.IsActive() {
 		return 0
 	}
@@ -459,7 +385,7 @@ func (m *AppModelV2) overlayReservedHeight() int {
 }
 
 // handleKey processes keyboard input.
-func (m *AppModelV2) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
+func (m *ChatModel) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.copyMode.IsActive() {
@@ -497,9 +423,9 @@ func (m *AppModelV2) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 			return true, nil
 		}
 		if strings.HasPrefix(input, "/") {
-			m.handleCommand(input)
+			cmd := m.handleCommand(input)
 			m.input.Reset()
-			return true, nil
+			return true, cmd
 		}
 		return true, m.startRun(input)
 
@@ -542,12 +468,12 @@ func (m *AppModelV2) handleKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 }
 
 // contentY adjusts terminal mouse Y to list-relative Y by subtracting the header.
-func (m *AppModelV2) contentY(terminalY int) int {
+func (m *ChatModel) contentY(terminalY int) int {
 	return terminalY - 2 // Ergate title (1 row) + model line (1 row)
 }
 
 // handleMouse processes mouse events — reuses CopyMode for text selection.
-func (m *AppModelV2) handleMouse(msg tea.MouseMsg) tea.Cmd {
+func (m *ChatModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Button {
 	case tea.MouseButtonWheelUp:
 		m.msgList.ScrollBy(-3)
@@ -594,7 +520,7 @@ func (m *AppModelV2) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 // handleItemClick dispatches a click to the list item at the given position.
 // x and y are list-relative coordinates (header already subtracted).
-func (m *AppModelV2) handleItemClick(x, y int) tea.Cmd {
+func (m *ChatModel) handleItemClick(x, y int) tea.Cmd {
 	item, itemY := m.msgList.ItemAtPosition(x, y)
 	if item == nil {
 		return nil
@@ -608,7 +534,7 @@ func (m *AppModelV2) handleItemClick(x, y int) tea.Cmd {
 }
 
 // startRun begins a new engine turn. Returns the commands to listen for events.
-func (m *AppModelV2) startRun(input string) tea.Cmd {
+func (m *ChatModel) startRun(input string) tea.Cmd {
 	// Add user message.
 	userMsg := message.New("user", input)
 	userMsg.Finish()
@@ -634,7 +560,7 @@ func (m *AppModelV2) startRun(input string) tea.Cmd {
 }
 
 // cancelRun interrupts the running engine.
-func (m *AppModelV2) cancelRun() {
+func (m *ChatModel) cancelRun() {
 	if !m.running {
 		return
 	}
@@ -648,7 +574,7 @@ func (m *AppModelV2) cancelRun() {
 }
 
 // refreshToolsBar rebuilds the toolbar state.
-func (m *AppModelV2) refreshToolsBar() {
+func (m *ChatModel) refreshToolsBar() {
 	var items []ToolsBarItem
 	if m.currentToolName != "" {
 		items = append(items, ToolsBarItem{Icon: "⚙", Label: m.currentToolName + "..."})
@@ -667,14 +593,14 @@ func (m *AppModelV2) refreshToolsBar() {
 }
 
 // appendMessage adds a message to the list and updates the list.
-func (m *AppModelV2) appendMessage(msg *message.ChatMessage) {
+func (m *ChatModel) appendMessage(msg *message.ChatMessage) {
 	m.messages = append(m.messages, msg)
 	m.msgList.AppendItems(msg)
 	m.viewDirty = true
 }
 
 // flushStream writes the buffered streaming text to a message.
-func (m *AppModelV2) flushStream() {
+func (m *ChatModel) flushStream() {
 	text, role := m.stream.Flush()
 	if text == "" {
 		return
@@ -694,7 +620,7 @@ func (m *AppModelV2) flushStream() {
 }
 
 // handleEngineEvent dispatches engine events into the message list.
-func (m *AppModelV2) handleEngineEvent(event engine.Event) {
+func (m *ChatModel) handleEngineEvent(event engine.Event) {
 	switch event.Type {
 	case engine.EventText:
 		if text, ok := event.Data.(string); ok {
@@ -774,7 +700,7 @@ func (m *AppModelV2) handleEngineEvent(event engine.Event) {
 }
 
 // listenEvents returns a command that reads the next engine event.
-func (m *AppModelV2) listenEvents() tea.Cmd {
+func (m *ChatModel) listenEvents() tea.Cmd {
 	return func() tea.Msg {
 		event, ok := <-m.eventChan
 		if !ok {
@@ -785,7 +711,7 @@ func (m *AppModelV2) listenEvents() tea.Cmd {
 }
 
 // saveSession persists the current conversation.
-func (m *AppModelV2) saveSession() {
+func (m *ChatModel) saveSession() {
 	if m.sessionStore == nil {
 		return
 	}
@@ -804,10 +730,10 @@ func (m *AppModelV2) saveSession() {
 }
 
 // handleCommand processes slash commands. Migrated from chat_events.go:314-417.
-func (m *AppModelV2) handleCommand(input string) {
+func (m *ChatModel) handleCommand(input string) tea.Cmd {
 	parts := strings.Fields(input)
 	if len(parts) == 0 {
-		return
+		return nil
 	}
 	switch parts[0] {
 	case "/exit", "/quit":
@@ -820,13 +746,12 @@ func (m *AppModelV2) handleCommand(input string) {
 		m.saveSession()
 		m.appendMessage(message.New("system", "Session saved."))
 	case "/resume":
-		m.handleResume(parts)
+		return m.handleResume(parts)
 	case "/load":
-		m.handleLoad(parts)
+		return m.handleLoad(parts)
 	case "/sessions":
-		if m.sessionStore != nil {
-			ids, _ := m.sessionStore.List()
-			m.appendMessage(message.New("system", fmt.Sprintf("Sessions: %v", ids)))
+		return func() tea.Msg {
+			return SwitchToSessionPageMsg{}
 		}
 	case "/thinking":
 		m.hideThinking = !m.hideThinking
@@ -865,62 +790,30 @@ func (m *AppModelV2) handleCommand(input string) {
 	default:
 		m.appendMessage(message.New("system", fmt.Sprintf("Unknown command: %s", parts[0])))
 	}
+	return nil
 }
 
-func (m *AppModelV2) handleResume(parts []string) {
+func (m *ChatModel) handleResume(parts []string) tea.Cmd {
 	if m.sessionStore == nil {
 		m.appendMessage(message.New("error", "No session store available."))
-		return
+		return nil
 	}
 	m.saveSession()
-	sessID := ""
-	if len(parts) > 1 {
-		sessID = parts[1]
-	}
-	var sess *session.Session
-	var err error
-	if sessID != "" {
-		sess, err = m.sessionStore.Load(sessID)
-	} else {
-		sess, err = m.sessionStore.Latest()
-	}
-	if err != nil {
-		m.appendMessage(message.New("error", fmt.Sprintf("Resume failed: %v", err)))
-	} else if sess == nil {
-		m.appendMessage(message.New("system", "No saved sessions to resume."))
-	} else {
-		m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
-		m.messages = []*message.ChatMessage{
-			message.New("system", fmt.Sprintf("[Resumed session: %s - %d messages]", sess.ID, len(sess.Messages))),
-		}
-		m.sessionID = sess.ID
-		// Convert engine messages to TUI messages.
-		for _, msg := range m.eng.Messages() {
-			m.appendConvertedMessages(msg)
-		}
-		m.forceScrollBottom = true
+	return func() tea.Msg {
+		return SwitchToSessionPageMsg{}
 	}
 }
 
-func (m *AppModelV2) handleLoad(parts []string) {
+func (m *ChatModel) handleLoad(parts []string) tea.Cmd {
 	if m.sessionStore == nil || len(parts) < 2 {
-		return
+		return nil
 	}
-	sess, err := m.sessionStore.Load(parts[1])
-	if err != nil {
-		m.appendMessage(message.New("error", fmt.Sprintf("Load failed: %v", err)))
-		return
-	}
-	m.eng.ImportSession(engine.SessionData{Messages: sess.Messages, Usage: sess.Usage})
-	m.messages = []*message.ChatMessage{
-		message.New("system", fmt.Sprintf("[Loaded: %s]", parts[1])),
-	}
-	m.sessionID = parts[1]
-	m.msgList.SetItems([]list.Item{m.messages[0]})
+	m.LoadSession(parts[1])
+	return nil
 }
 
 // appendConvertedMessages converts an engine-level message to TUI messages and appends them.
-func (m *AppModelV2) appendConvertedMessages(msg llm.Message) {
+func (m *ChatModel) appendConvertedMessages(msg llm.Message) {
 	for _, b := range msg.Content {
 		switch msg.Role {
 		case "user":
@@ -952,13 +845,13 @@ func (m *AppModelV2) appendConvertedMessages(msg llm.Message) {
 }
 
 // engTotalIn returns total input tokens from the engine.
-func (m *AppModelV2) engTotalIn() int {
+func (m *ChatModel) engTotalIn() int {
 	in, _ := m.eng.TotalUsage()
 	return in
 }
 
 // engTotalOut returns total output tokens from the engine.
-func (m *AppModelV2) engTotalOut() int {
+func (m *ChatModel) engTotalOut() int {
 	_, out := m.eng.TotalUsage()
 	return out
 }
