@@ -40,4 +40,10 @@ GEMINI.md
 # Config (if contains secrets)
 config.yaml
 .worktrees
+
+# GSD planning artifacts
 .planning
+
+# Superpowers brainstorming artifacts
+.superpowers/
+cache_stats.log
