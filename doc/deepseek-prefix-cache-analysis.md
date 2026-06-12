@@ -232,17 +232,64 @@ ReCAP 的核心洞察——**"不是给 Agent 更多上下文，而是更好地�
 
 ReCAP 用三种 prompt 模板（root / recursive / backtracking）在不同粒度注入不同结构的信息，设计原则是 **"只注入必要信息，保持结构清晰"**。Ergate Fold 的摘要也应该遵循这个原则——不是"越详细越好"，而是"结构越清晰越好"。
 
-## 7. 优化路线图
+## 7. Reasonix Go v1.0 源码分析
 
-| 优先级 | 改动 | 复杂度 | 预期收益 | 实验依据 |
-|--------|------|--------|---------|---------|
-| P0 | Compaction Fold（尾部保留 + 结构化摘要） | 中 | 长会话上下文质量大幅提升 | 实验 A: compaction 当轮命中率从 77% 暴跌至 4% |
-| P1 | Thinking 不入消息历史（VolatileScratch） | 低 | 减少 token、延迟 compaction | ReCAP 消融: 去 Think 仍保持 60% vs 80% |
+> 源码：https://github.com/esengine/DeepSeek-Reasonix/tree/main-v2
+>
+> Reasonix 从 TypeScript v0.x 重写为 Go v1.0。Go 版作为迭代版本，简化了部分设计。
+
+### 7.1 Go 版实际裁剪策略
+
+| 文件 | 裁剪对象 | 机制 |
+|------|---------|------|
+| `agent/prune.go` | ≥1024 字节的工具结果 | 替换为 `"[elided tool result — X bytes]"`，原文归档磁盘 |
+| `history/strip.go` | compose XML 块 | 正则移除 `<memory-update>`、`<background-jobs>`、`<active-goal>` |
+| `agent/compact.go` | 旧对话历史 | Fold 为摘要，保留 pinned prefix + 16k token 尾部 |
+
+### 7.2 Thinking 显式保留
+
+```go
+// provider.go
+type Message struct {
+    ReasoningContent   string  // ← 显式保留，不裁剪
+    ReasoningSignature string  // ← Anthropic 签名，必须回放
+}
+```
+
+注释："Anthropic requires the signed thinking block be replayed on the next turn when a tool call followed thinking"
+
+### 7.3 TypeScript → Go 的迭代决策
+
+Go v1.0 从 TypeScript 版的 DeepSeek-only 演进为多 provider（Anthropic + OpenAI + DeepSeek）。Anthropic 的 extended thinking 签名机制要求 thinking block 必须在下一轮原样回放——这是 API 协议要求，不是可选的优化。因此 Go 版**放弃了 VolatileScratch**，改为保留 thinking。
+
+推测其判断：**fold + prune 已经管住了上下文膨胀，thinking 的额外空间开销不值得引入 VolatileScratch 的复杂度。**
+
+### 7.4 Fold 具体实现
+
+```
+[pinned prefix] [folded summaries...] [recent tail ≤ 16384 tokens]
+     ↑                    ↑                    ↑
+  system prompt    累积的多个摘要       最近几轮原文
+  第一个 user turn  (不合并为一个)       最少保留 2 条消息
+  所有之前的摘要                        在 tool result 边界对齐
+```
+
+额外机制：
+- **连续 compact 检测**：两次连续 compact → `compactStuck = true`，暂停自动 compact 并警告
+- **强制比例**：`compactForceRatio = 0.9`，即使 prune 能释放空间也强制 compact
+- **摘要累积**：每次 fold 新增一个摘要消息，不覆盖之前的摘要——防止渐进式事实丢失
+
+## 8. 优化路线图
+
+| 优先级 | 改动 | 复杂度 | 预期收益 | 依据 |
+|--------|------|--------|---------|------|
+| **P0** | **Compaction Fold**（尾部保留 + 结构化摘要） | 中 | 上下文质量 + 缓存 baseline | 实验 A: compaction 命中率从 77% 暴跌至 4%；Reasonix Go: fold preserved tail |
+| **P0** | **Prune 大工具结果**（归档到磁盘，替换为指针） | 低 | 释放上下文空间 | Reasonix Go prune: ≥1024 字节替换；ergate 已有 `maxResultChars` 可扩展 |
 | P1 | 工具 Schema 确定性序列化 | 低 | 避免非预期缓存失效 | Reasonix 实践: key 重排直接丢缓存 |
 | P2 | Append-Only 日志抽象 | 高 | 类型系统保证缓存正确性 | DeepSeek 官方: 中间字节改变 → 后续全 miss |
+| ~~P1~~ | ~~Thinking 不入消息历史~~ | — | — | **降级**：Reasonix Go 显式保留 thinking（Anthropic 签名硬约束）；fold+prune 已管住上下文膨胀；ReCAP 消融数据作为后续参考 |
 | P3 | 周期性约束重注入 | 低 | 长会话中防止"规则遗忘" | ReCAP: 每 10 轮注入规则 |
-
-## 8. 参考
+| P3 | 结构化摘要 | 低 | 更好的 LLM 理解和缓存友好性 | ReCAP: ⟨T, S[1:]⟩ 结构化回注
 
 - [DeepSeek Context Caching 文档](https://api-docs.deepseek.com/guides/kv_cache)
 - [ReCAP: Recursive Context-Aware Reasoning and Planning (NeurIPS 2025)](https://arxiv.org/abs/2510.23822)

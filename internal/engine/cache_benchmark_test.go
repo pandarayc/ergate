@@ -383,6 +383,294 @@ func deepCopy(src []llm.Message) []llm.Message {
 	return dst
 }
 
+// turnRecord holds a single conversation turn.
+type turnRecord struct {
+	userMsg      llm.Message
+	assistantMsg llm.Message
+}
+
+// splitMsg holds a split of an assistant response into thinking and output.
+type splitMsg struct {
+	Thinking string
+	Output   string
+}
+
+// TestThinkingStripQuality runs a 3-turn task-completion conversation, then
+// compares two turn-4 contexts: one with thinking preserved, one with thinking
+// stripped + structured summary. Measures whether stripping thinking degrades
+// the LLM's ability to recall facts from earlier turns.
+func TestThinkingStripQuality(t *testing.T) {
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		t.Skip("set DEEPSEEK_API_KEY to run this test")
+	}
+
+	client, err := llm.NewLLMClient("deepseek", apiKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	model := "deepseek-v4-flash"
+	sysPrompt := `You are Ergate, a helpful AI assistant with access to software engineering tools.
+
+## Environment
+- Working directory: /data/projects/personal/ergate
+- Date: 2026-06-12
+- Platform: linux
+
+## Instructions
+- Be concise and direct.
+- When reading files, report the key facts clearly.
+- After completing a task, briefly summarize what you found.`
+
+	// ── Phase 1: 3-turn task-completion conversation ─────────────────
+	// Each turn accomplishes a specific goal. We'll use streamChat to collect
+	// both text and cache metrics, and manually build the message history.
+
+	var history []turnRecord
+
+	ctx := context.Background()
+
+	// Turn 1: Read and analyze go.mod
+	{
+		req := &llm.ChatRequest{
+			Model: model, System: sysPrompt, MaxTokens: 8192,
+			Messages: []llm.Message{
+				llm.NewUserMessage("Read the file go.mod. Tell me: 1) Go version 2) Module path 3) All direct dependencies with their versions."),
+			},
+		}
+		text, _, _, err := streamChat(ctx, client, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, turnRecord{
+			userMsg:      req.Messages[0],
+			assistantMsg: llm.Message{Type: llm.MsgAssistant, Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: text}}},
+		})
+		t.Logf("turn 1: %d chars response", len(text))
+		time.Sleep(2 * time.Second)
+	}
+
+	// Turn 2: Analyze internal/llm/client.go
+	{
+		var msgs []llm.Message
+		for _, h := range history {
+			msgs = append(msgs, h.userMsg, h.assistantMsg)
+		}
+		msgs = append(msgs, llm.NewUserMessage(
+			"Read internal/llm/client.go. List every type, interface, and constant defined in this file."))
+
+		req := &llm.ChatRequest{
+			Model: model, System: sysPrompt, MaxTokens: 8192, Messages: msgs,
+		}
+		text, _, _, err := streamChat(ctx, client, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, turnRecord{
+			userMsg:      msgs[len(msgs)-1],
+			assistantMsg: llm.Message{Type: llm.MsgAssistant, Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: text}}},
+		})
+		t.Logf("turn 2: %d chars response", len(text))
+		time.Sleep(2 * time.Second)
+	}
+
+	// Turn 3: Analyze internal/compact/compact.go
+	{
+		var msgs []llm.Message
+		for _, h := range history {
+			msgs = append(msgs, h.userMsg, h.assistantMsg)
+		}
+		msgs = append(msgs, llm.NewUserMessage(
+			"Read internal/compact/compact.go. Explain: 1) What SnipCompact does 2) What AutoCompact does 3) What constants are defined."))
+
+		req := &llm.ChatRequest{
+			Model: model, System: sysPrompt, MaxTokens: 8192, Messages: msgs,
+		}
+		text, _, _, err := streamChat(ctx, client, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, turnRecord{
+			userMsg:      msgs[len(msgs)-1],
+			assistantMsg: llm.Message{Type: llm.MsgAssistant, Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: text}}},
+		})
+		t.Logf("turn 3: %d chars response", len(text))
+		time.Sleep(2 * time.Second)
+	}
+
+	// ── Phase 2: Build two turn-4 contexts ───────────────────────────
+
+	// Simulate thinking: for each assistant message, split out a "thinking" portion.
+	// In real R1, this would be reasoning_content. Here we use a heuristic:
+	// first 30% of the response is "thinking" (analysis), rest is "output".
+	var splitHistory []splitMsg
+	for _, h := range history {
+		text := extractTextFromMsg(h.assistantMsg)
+		cut := len(text) / 3 // rough split: first 1/3 = thinking
+		if cut < 20 {
+			cut = 0
+		}
+		splitHistory = append(splitHistory, splitMsg{
+			Thinking: text[:cut],
+			Output:   text[cut:],
+		})
+	}
+
+	// Build base message list (turns 1-3, without thinking blocks)
+	var baseMsgs []llm.Message
+	for i, h := range history {
+		baseMsgs = append(baseMsgs, h.userMsg)
+		if splitHistory[i].Thinking != "" {
+			baseMsgs = append(baseMsgs, llm.Message{
+				Type: llm.MsgAssistant, Role: "assistant",
+				Content: []llm.ContentBlock{
+					{Type: "thinking", Thinking: splitHistory[i].Thinking},
+					{Type: "text", Text: splitHistory[i].Output},
+				},
+			})
+		} else {
+			baseMsgs = append(baseMsgs, h.assistantMsg)
+		}
+	}
+
+	// Generate structured summary of turns 1-3 (ReCAP-style)
+	summary := generateStructuredSummary(t, client, model, history, splitHistory)
+	t.Logf("structured summary: %d chars", len(summary))
+
+	// Variant A: Full context with thinking preserved
+	followUp := "Based on everything you analyzed in the previous turns, what is the single most important architectural decision in this project? Answer in 2-3 sentences."
+	var reqA = &llm.ChatRequest{
+		Model: model, System: sysPrompt, MaxTokens: 2048,
+		Messages: append(deepCopy(baseMsgs), llm.NewUserMessage(followUp)),
+	}
+
+	// Variant B: Compaction with thinking stripped, structured summary only
+	foldedMsgs := []llm.Message{
+		{Type: llm.MsgSystem, Role: "system", Subtype: "compact_boundary",
+			Content: []llm.ContentBlock{{Type: "text", Text: summary}}},
+		llm.NewUserMessage("[Context from previous turns]\n\n" + summary),
+		{Type: llm.MsgAssistant, Role: "assistant",
+			Content: []llm.ContentBlock{{Type: "text", Text: "Understood. I have the context from the previous analysis."}}},
+		llm.NewUserMessage(followUp),
+	}
+	var reqB = &llm.ChatRequest{
+		Model: model, System: sysPrompt, MaxTokens: 2048, Messages: foldedMsgs,
+	}
+
+	// ── Phase 3: Compare ─────────────────────────────────────────────
+	fmt.Println()
+	fmt.Println("=============================================================")
+	fmt.Println("  Thinking Strip Quality Test")
+	fmt.Println("  Compare: Full history (with thinking) vs Structured summary")
+	fmt.Println("=============================================================")
+
+	// Variant A first
+	textA, _, _, err := streamChat(ctx, client, reqA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1 * time.Second)
+
+	// Variant B second
+	textB, _, _, err := streamChat(ctx, client, reqB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fmt.Println()
+	fmt.Println("─── Variant A: Full history (thinking preserved) ───")
+	fmt.Printf("  Context: %d messages, ~%d chars\n", len(reqA.Messages), estimateCharLen(reqA.Messages))
+	fmt.Println("  Response:")
+	for _, line := range wrapLines(textA, 70) {
+		fmt.Printf("    %s\n", line)
+	}
+
+	fmt.Println()
+	fmt.Println("─── Variant B: Structured summary (thinking stripped) ───")
+	fmt.Printf("  Context: %d messages, ~%d chars\n", len(reqB.Messages), estimateCharLen(reqB.Messages))
+	fmt.Println("  Response:")
+	for _, line := range wrapLines(textB, 70) {
+		fmt.Printf("    %s\n", line)
+	}
+
+	// ── Phase 4: Report ──────────────────────────────────────────────
+	fmt.Println()
+	fmt.Println("─── Comparison ───")
+	fmt.Printf("  Variant A: %d chars response (%d messages context)\n", len(textA), len(reqA.Messages))
+	fmt.Printf("  Variant B: %d chars response (%d messages context)\n", len(textB), len(reqB.Messages))
+	fmt.Printf("  Context reduction: %.0f%% less messages\n",
+		float64(len(reqA.Messages)-len(reqB.Messages))/float64(len(reqA.Messages))*100)
+	fmt.Println("=============================================================")
+}
+
+func generateStructuredSummary(t *testing.T, client llm.LLMClient, model string,
+	history []turnRecord, split []splitMsg) string {
+	t.Helper()
+
+	// Build a prompt that asks for structured summary
+	var facts strings.Builder
+	for i, h := range history {
+		fmt.Fprintf(&facts, "Turn %d: User asked: %s\n", i+1, extractTextFromMsg(h.userMsg))
+		fmt.Fprintf(&facts, "Assistant found: %s\n", split[i].Output)
+	}
+
+	req := &llm.ChatRequest{
+		Model:    model,
+		System:   "You are a context summarizer. Output ONLY a structured summary. No preamble.",
+		Messages: []llm.Message{llm.NewUserMessage(fmt.Sprintf(
+			`Summarize these conversation turns into a structured context block:
+
+%s
+
+Format your response EXACTLY like this:
+[已完成]
+- Task 1: <what was done, key findings>
+- Task 2: <what was done, key findings>
+
+[关键发现]
+- Finding 1
+- Finding 2
+
+[当前状态]
+- What the user is trying to do overall`, facts.String()))},
+		MaxTokens: 800,
+	}
+	text, _, _, err := streamChat(context.Background(), client, req)
+	if err != nil {
+		return "summary unavailable"
+	}
+	return text
+}
+
+func extractTextFromMsg(m llm.Message) string {
+	var b strings.Builder
+	for _, c := range m.Content {
+		if c.Type == "text" {
+			b.WriteString(c.Text)
+		}
+	}
+	return b.String()
+}
+
+func estimateCharLen(msgs []llm.Message) int {
+	raw, _ := json.Marshal(msgs)
+	return len(raw)
+}
+
+func wrapLines(s string, width int) []string {
+	var lines []string
+	for len(s) > width {
+		lines = append(lines, s[:width])
+		s = s[width:]
+	}
+	if len(s) > 0 {
+		lines = append(lines, s)
+	}
+	return lines
+}
+
 // bypassPermMgr always allows tool execution.
 type bypassPermMgr struct{}
 
