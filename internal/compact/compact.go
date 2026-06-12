@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/raydraw/ergate/internal/llm"
 )
@@ -226,6 +229,66 @@ func foldCompact(ctx context.Context, client llm.LLMClient, messages []llm.Messa
 	}
 	compacted = append(compacted, tail...)
 	return compacted, nil
+}
+
+// PruneCompact archives large tool results to disk and replaces them with
+// short pointers. It keeps the most recent N tool results intact
+// (same KeepRecent as MicroCompact). Returns modified slice and bytes freed.
+func PruneCompact(msgs []llm.Message, thresholdBytes int) ([]llm.Message, int) {
+	if thresholdBytes <= 0 {
+		return msgs, 0
+	}
+
+	var toolIdx []int
+	for i, m := range msgs {
+		if hasToolResult(m) {
+			toolIdx = append(toolIdx, i)
+		}
+	}
+	if len(toolIdx) <= KeepRecent {
+		return msgs, 0
+	}
+
+	saved := 0
+	for _, idx := range toolIdx[:len(toolIdx)-KeepRecent] {
+		for j := range msgs[idx].Content {
+			if msgs[idx].Content[j].Type != "tool_result" {
+				continue
+			}
+			content := decodeRawMessage(msgs[idx].Content[j].Content)
+			if len(content) <= thresholdBytes {
+				continue
+			}
+
+			// Archive to disk.
+			resultDir := filepath.Join(".ergate", "tool-results")
+			os.MkdirAll(resultDir, 0o700)
+			fname := filepath.Join(resultDir, fmt.Sprintf("prune_%d.txt", time.Now().UnixNano()))
+			if err := os.WriteFile(fname, []byte(content), 0o644); err == nil {
+				pointer := fmt.Sprintf("[pruned: %d bytes saved to %s. Use Read with file_path=%q to retrieve the full result.]",
+					len(content), fname, fname)
+				saved += len(content) - len(pointer)
+				msgs[idx].Content[j].Content = mustMarshalString(pointer)
+			}
+		}
+	}
+	return msgs, saved
+}
+
+func decodeRawMessage(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
+}
+
+func mustMarshalString(s string) json.RawMessage {
+	b, _ := json.Marshal(s)
+	return json.RawMessage(b)
 }
 
 // CompactToolSchema returns the JSON schema for the compact tool.

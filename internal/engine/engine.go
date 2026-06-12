@@ -687,13 +687,22 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 		return
 	}
 
-	// Layer 1: SnipCompact — clear old thinking/reasoning content locally
-	// before summarization. Only applied when we're actually compacting.
+	// Layer 1: SnipCompact — clear old thinking/reasoning content.
 	if _, saved := compact.SnipCompact(messages); saved > 0 {
 		e.logger.Debug("snip compact freed tokens", "tokens", saved)
 	}
 
-	// Layer 2: FoldCompact — LLM summarization with tail preservation.
+	// Layer 2: PruneCompact — archive large tool results to disk,
+	// replacing them with short pointers. Reduces summarization input size.
+	pruneBytes := e.cfg.CompactPruneBytes
+	if pruneBytes <= 0 {
+		pruneBytes = 4096
+	}
+	if _, saved := compact.PruneCompact(messages, pruneBytes); saved > 0 {
+		e.logger.Debug("prune compact freed bytes", "bytes", saved)
+	}
+
+	// Layer 3: FoldCompact — LLM summarization with tail preservation.
 	// Keeps the most recent messages intact for context continuity.
 	events <- Event{Type: EventThinking, Data: "Compacting context...", Turn: turn}
 

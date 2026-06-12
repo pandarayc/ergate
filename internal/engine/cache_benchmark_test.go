@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -908,6 +909,70 @@ func runWithRecall(t *testing.T, eng *engine.Engine, knowledge []string, recall 
 		t.Logf("recall: %v", err)
 	}
 	return answer.String()
+}
+
+// TestPruneCompact runs a conversation with large file reads and verifies
+// that PruneCompact archives old tool results and frees context space.
+func TestPruneCompact(t *testing.T) {
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		t.Skip("set DEEPSEEK_API_KEY to run this test")
+	}
+
+	// Use a very low prune threshold and early compaction to trigger pruning.
+	eng, client := newTestEngine(t, apiKey, "deepseek-v4-flash", 0.30, 3)
+	defer client.Close()
+
+	ctx := context.Background()
+	questions := []string{
+		// Read a large file to generate a big tool result.
+		"Read internal/llm/provider/openai_adapter.go. Show the complete file content.",
+		// Another read to build up context.
+		"Read internal/engine/engine.go. What does the handleToolResult function do?",
+		// Third read to trigger compaction + pruning.
+		"Read internal/compact/compact.go. What layers of compaction exist?",
+		// Check if previous details are still accessible post-prune.
+		"Based on what you read before: what does openai_adapter.go's BuildRequestBody do?",
+	}
+
+	var lastHit, lastMiss int
+	for i, q := range questions {
+		events := make(chan engine.Event, 256)
+		errCh := make(chan error, 1)
+		go func() { errCh <- eng.Run(ctx, q, events) }()
+		for range events {
+		}
+		if err := <-errCh; err != nil {
+			t.Logf("turn %d: %v", i+1, err)
+		}
+		h, m := eng.CacheUsage()
+		cc := eng.CompactCount()
+		t.Logf("turn %d: hit=%d miss=%d (+%d/+%d) compact=%d",
+			i+1, h, m, h-lastHit, m-lastMiss, cc)
+		lastHit, lastMiss = h, m
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Check that prune files were created.
+	entries, _ := os.ReadDir(filepath.Join(".ergate", "tool-results"))
+	pruneCount := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "prune_") {
+			pruneCount++
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("=============================================================")
+	fmt.Println("  PruneCompact Test")
+	fmt.Println("=============================================================")
+	fmt.Printf("  Compaction count: %d\n", eng.CompactCount())
+	fmt.Printf("  Prune files created: %d\n", pruneCount)
+	hit, miss := eng.CacheUsage()
+	if hit+miss > 0 {
+		fmt.Printf("  Overall hit rate: %5.1f%%\n", float64(hit)/float64(hit+miss)*100)
+	}
+	fmt.Println("=============================================================")
 }
 
 // bypassPermMgr always allows tool execution.
