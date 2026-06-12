@@ -72,6 +72,10 @@ type Config struct {
 	MaxTokens   int     `mapstructure:"max_tokens"`
 	Temperature float64 `mapstructure:"temperature"`
 
+	// Compaction
+	CompactThreshold float64 `mapstructure:"compact_threshold"` // fraction of context window, default 0.8
+	CompactKeepTail  int     `mapstructure:"compact_keep_tail"`  // messages to preserve at end, default 3
+
 	// Permissions
 	PermissionMode PermissionMode `mapstructure:"permission_mode"`
 
@@ -91,6 +95,9 @@ type Config struct {
 
 	// Feature flags
 	EnableMCP bool `mapstructure:"enable_mcp"`
+
+	// Monitoring
+	CacheStatsFile string `mapstructure:"cache_stats_file"` // e.g. "ergate_cache.log" — per-turn cache metrics
 
 	// Internal paths
 	ConfigDir string `mapstructure:"-"`

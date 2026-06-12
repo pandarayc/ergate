@@ -69,10 +69,12 @@ type Engine struct {
 	planMgr     *planmode.Manager
 	taskNotify     <-chan task.Notification
 	todoMgr        *tool.TodoManager
-	cacheStability *cachestability.Manager
-	permCtx         tool.PermissionContext
+	cacheStability          *cachestability.Manager
+	openAIDynamicCtxInjected bool // ensures dyn ctx message injected only once for prefix cache
+	permCtx                  tool.PermissionContext
 	transcriptDir string
 	compactFailures int // circuit breaker for AutoCompact
+	compactCount     int // number of successful compactions performed
 }
 
 // Context holds the optional subsystems available to the engine.
@@ -163,6 +165,7 @@ func (e *Engine) Clear() {
 	defer e.mu.Unlock()
 	e.messages = make([]llm.Message, 0)
 	e.usage = llm.Usage{}
+	e.openAIDynamicCtxInjected = false
 }
 
 // TotalUsage returns accumulated token usage.
@@ -192,6 +195,13 @@ func (e *Engine) TaskCount() (running, done int) {
 	// taskNotify is a channel from Registry; we don't have direct access.
 	// For now return the count from the engine context.
 	return 0, 0
+}
+
+// CompactCount returns the number of successful compactions performed.
+func (e *Engine) CompactCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.compactCount
 }
 
 // CacheRatio returns the prefix-cache stability ratio (0-100).
@@ -426,8 +436,28 @@ func (e *Engine) buildRequest() *llm.ChatRequest {
 	copy(messages, e.messages)
 	e.mu.Unlock()
 
-	sysPrompt := e.buildSystemPrompt()
+	pin := e.promptInput()
+	sysPrompt := prompt.Build(pin)
 	toolNames := e.tools.ToolNames()
+
+	// For OpenAI-compatible providers (DeepSeek), split the system prompt
+	// into a stable cacheable prefix and a dynamic context injected as the
+	// first user message. This keeps the system message byte-identical
+	// between turns, which is critical for automatic prefix caching.
+	pc := e.cfg.ActiveProviderConfig()
+	if pc.Compat == config.CompatOpenAI {
+		// Stable system prompt for automatic prefix caching.
+		// Dynamic context (env, skills, plan mode) is injected as a
+		// persistent first user message — done once, then stays in history.
+		sysPrompt = prompt.BuildStable(pin)
+		if !e.openAIDynamicCtxInjected {
+			if dyn := prompt.BuildDynamicContext(pin); dyn != "" {
+				dynMsg := llm.NewUserMessage(dyn)
+				messages = append([]llm.Message{dynMsg}, messages...)
+			}
+			e.openAIDynamicCtxInjected = true
+		}
+	}
 
 	// Prefix cache stability check (first call initializes, subsequent calls compare).
 	if e.cacheStability == nil {
@@ -447,10 +477,6 @@ func (e *Engine) buildRequest() *llm.ChatRequest {
 		Temperature:    e.cfg.Temperature,
 		ThinkingBudget: opts.ThinkingBudget,
 	}
-}
-
-func (e *Engine) buildSystemPrompt() string {
-	return prompt.Build(e.promptInput())
 }
 
 func (e *Engine) promptInput() prompt.Input {
@@ -635,11 +661,19 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 		return
 	}
 
-	// Dynamic threshold: 80% of context window, or default if unknown.
+	// Threshold: config overrides the default 0.8 fraction of context window.
+	ratio := e.cfg.CompactThreshold
+	if ratio <= 0 {
+		ratio = 0.8
+	}
+	keepTail := e.cfg.CompactKeepTail
+	if keepTail <= 0 {
+		keepTail = 3
+	}
 	threshold := 0
 	opts := e.cfg.ActiveModelOptions()
 	if opts.ContextWindow > 0 {
-		threshold = opts.ContextWindow * 80 / 100
+		threshold = int(float64(opts.ContextWindow) * ratio)
 	}
 
 	e.mu.Lock()
@@ -647,24 +681,23 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	copy(messages, e.messages)
 	e.mu.Unlock()
 
-	// Layer 1: SnipCompact — clear old thinking/reasoning content.
-	// Zero API calls, prefix-safe (only clears text inside existing messages).
+	if !compact.ShouldCompact(messages, threshold) {
+		// No compaction needed — don't touch messages at all.
+		// Preserving message identity is critical for prefix-cache stability.
+		return
+	}
+
+	// Layer 1: SnipCompact — clear old thinking/reasoning content locally
+	// before summarization. Only applied when we're actually compacting.
 	if _, saved := compact.SnipCompact(messages); saved > 0 {
 		e.logger.Debug("snip compact freed tokens", "tokens", saved)
 	}
 
-	if !compact.ShouldCompact(messages, threshold) {
-		e.mu.Lock()
-		e.messages = messages
-		e.mu.Unlock()
-		return
-	}
-
-	// Layer 2: AutoCompact — LLM summarization.
-	// This is the heavy layer: rewrites all messages, destroys prefix cache.
+	// Layer 2: FoldCompact — LLM summarization with tail preservation.
+	// Keeps the most recent messages intact for context continuity.
 	events <- Event{Type: EventThinking, Data: "Compacting context...", Turn: turn}
 
-	compacted, err := compact.AutoCompact(ctx, e.client, messages, e.cfg.Model)
+	compacted, err := compact.FoldCompact(ctx, e.client, messages, e.cfg.Model, keepTail)
 	if err != nil {
 		e.compactFailures++
 		events <- Event{Type: EventError, Data: fmt.Errorf("compaction failed (%d/%d): %w",
@@ -673,6 +706,7 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	}
 	messages = compacted
 	e.compactFailures = 0 // reset on success
+	e.compactCount++
 
 	e.mu.Lock()
 	e.messages = messages
@@ -836,6 +870,17 @@ func (e *Engine) ImportSession(data SessionData) {
 	e.usage = data.Usage
 	e.turns = make([]session.TurnMetrics, len(data.Turns))
 	copy(e.turns, data.Turns)
+
+	// Detect whether the imported session already has the dynamic context
+	// injected as a user message (for OpenAI prefix cache stability).
+	if len(e.messages) > 0 && e.messages[0].Role == "user" {
+		for _, b := range e.messages[0].Content {
+			if b.Type == "text" && strings.Contains(b.Text, "## Environment") {
+				e.openAIDynamicCtxInjected = true
+				break
+			}
+		}
+	}
 }
 
 // TurnMetrics returns a copy of per-turn metrics.

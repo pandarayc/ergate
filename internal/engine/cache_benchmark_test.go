@@ -671,6 +671,245 @@ func wrapLines(s string, width int) []string {
 	return lines
 }
 
+// TestFoldCompactVsAutoCompact runs two 5-turn conversations: one with
+// FoldCompact (keepTail=3) and one with AutoCompact (keepTail=0), comparing
+// cache metrics and response quality.
+func TestFoldCompactVsAutoCompact(t *testing.T) {
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		t.Skip("set DEEPSEEK_API_KEY to run this test")
+	}
+
+	questions := []string{
+		"Read go.mod and tell me: 1) Go version 2) Module path 3) All direct dependencies.",
+		"Read internal/llm/client.go. List every type, interface, and constant defined.",
+		"Read internal/compact/compact.go. What does AutoCompact do?",
+		"Based on everything you read, what is the most important architectural decision?",
+		"Summarize the entire project architecture in one paragraph.",
+	}
+
+	fmt.Println()
+	fmt.Println("=============================================================")
+	fmt.Println("  FoldCompact vs AutoCompact Comparison")
+	fmt.Println("=============================================================")
+	fmt.Println()
+
+	// ── Run A: AutoCompact (keepTail=0) ──────────────────────────
+	{
+		t.Log("=== AutoCompact (keepTail=0) ===")
+		eng, client := newTestEngine(t, apiKey, "deepseek-v4-flash", 0.20, 0)
+		defer client.Close()
+
+		hitA, missA := runConversation(t, eng, questions)
+		pctA := 0.0
+		if hitA+missA > 0 {
+			pctA = float64(hitA) / float64(hitA+missA) * 100
+		}
+		cc := eng.CompactCount()
+		fmt.Printf("  AutoCompact (keepTail=0):\n")
+		fmt.Printf("    compact triggered: %d times\n", cc)
+		fmt.Printf("    cache_hit:  %d  cache_miss: %d  hit_rate: %5.1f%%\n", hitA, missA, pctA)
+		fmt.Println()
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// ── Run B: FoldCompact (keepTail=3) ─────────────────────────
+	{
+		t.Log("=== FoldCompact (keepTail=3) ===")
+		eng, client := newTestEngine(t, apiKey, "deepseek-v4-flash", 0.20, 3)
+		defer client.Close()
+
+		hitB, missB := runConversation(t, eng, questions)
+		pctB := 0.0
+		if hitB+missB > 0 {
+			pctB = float64(hitB) / float64(hitB+missB) * 100
+		}
+		cc := eng.CompactCount()
+		fmt.Printf("  FoldCompact (keepTail=3):\n")
+		fmt.Printf("    compact triggered: %d times\n", cc)
+		fmt.Printf("    cache_hit:  %d  cache_miss: %d  hit_rate: %5.1f%%\n", hitB, missB, pctB)
+		fmt.Println()
+	}
+
+	fmt.Println("=============================================================")
+}
+
+// newTestEngine creates an engine with forced-early compaction for testing.
+func newTestEngine(t *testing.T, apiKey, model string, threshold float64, keepTail int) (*engine.Engine, llm.LLMClient) {
+	t.Helper()
+
+	cfg := &config.Config{
+		APIProvider:     config.ProviderDeepSeek,
+		Model:           model,
+		MaxTurns:        5,
+		MaxTokens:       8192,
+		Temperature:     0.0,
+		SessionDir:      os.TempDir(),
+		PermissionMode:  config.PermModeBypass,
+		CompactThreshold: threshold,
+		CompactKeepTail:  keepTail,
+		Providers: map[string]config.ProviderConfig{
+			"deepseek": {
+				APIKey: apiKey,
+				Models: map[string]config.ModelOptions{
+					model: {
+						ContextWindow:     32768,
+						CostPer1MIn:       1.0,
+						CostPer1MInCached: 0.02,
+						CostPer1MOut:      2.0,
+					},
+				},
+			},
+		},
+	}
+
+	client, err := llm.NewLLMClient("deepseek", apiKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	todoMgr := tool.NewTodoManager()
+	toolReg := tool.NewRegistry()
+	tool.RegisterBuiltins(toolReg, todoMgr)
+
+	ectx := engine.Context{
+		PermMgr: &bypassPermMgr{},
+		PermCtx: tool.PermissionContext{Mode: tool.PermModeBypassPermissions},
+	}
+	return engine.New(cfg, client, toolReg, ectx), client
+}
+
+// runConversation runs a list of questions through the engine and returns
+// total cache hit/miss token counts.
+func runConversation(t *testing.T, eng *engine.Engine, questions []string) (hit, miss int) {
+	ctx := context.Background()
+	var lastHit, lastMiss int
+
+	for _, q := range questions {
+		events := make(chan engine.Event, 256)
+		errCh := make(chan error, 1)
+		go func() { errCh <- eng.Run(ctx, q, events) }()
+		for range events {
+		}
+		if err := <-errCh; err != nil {
+			t.Logf("run: %v", err)
+		}
+
+		h, m := eng.CacheUsage()
+		t.Logf("  turn: hit=%d miss=%d (+%d/+%d)", h, m, h-lastHit, m-lastMiss)
+		lastHit, lastMiss = h, m
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return lastHit, lastMiss
+}
+
+// TestFoldCompactAnswerQuality compares response quality between AutoCompact
+// and FoldCompact on a fact-recall task. 3 turns build specific knowledge,
+// compaction triggers, then turn 4 asks a question that requires the tail facts.
+func TestFoldCompactAnswerQuality(t *testing.T) {
+	apiKey := os.Getenv("DEEPSEEK_API_KEY")
+	if apiKey == "" {
+		t.Skip("set DEEPSEEK_API_KEY to run this test")
+	}
+
+	// Build knowledge: 3 turns that read and analyze, building conceptual understanding.
+	knowledgeQuestions := []string{
+		"Read internal/llm/client.go. What is the overall design pattern used? How does this project abstract different LLM providers?",
+		"Read internal/compact/compact.go. Why does the project have multiple compaction layers (SnipCompact, MicroCompact, AutoCompact)? What problem does each solve?",
+		"Read internal/config/config.go. How does the config system support multiple LLM providers? What is the Compat field for?",
+	}
+
+	// The critical test: conceptual synthesis across all 3 turns.
+	// AutoCompact only has a summary → may lose the reasoning behind design choices.
+	// FoldCompact has the tail → should retain the "why" behind each decision.
+	recallQuestion := "Based on your earlier analysis of client.go, compact.go, and config.go: what are the 3 most important design decisions in this project, and WHY was each made? Do NOT re-read the files — answer from your analysis."
+
+	fmt.Println()
+	fmt.Println("=============================================================")
+	fmt.Println("  Answer Quality Comparison: FoldCompact vs AutoCompact")
+	fmt.Println("=============================================================")
+	fmt.Println()
+
+	// ── Run A: AutoCompact ──────────────────────────────────────────
+	var answerA string
+	{
+		t.Log("=== AutoCompact ===")
+		eng, client := newTestEngine(t, apiKey, "deepseek-v4-flash", 0.20, 0)
+		defer client.Close()
+
+		answerA = runWithRecall(t, eng, knowledgeQuestions, recallQuestion)
+	}
+
+	time.Sleep(3 * time.Second)
+
+	// ── Run B: FoldCompact ─────────────────────────────────────────
+	var answerB string
+	{
+		t.Log("=== FoldCompact ===")
+		eng, client := newTestEngine(t, apiKey, "deepseek-v4-flash", 0.20, 3)
+		defer client.Close()
+
+		answerB = runWithRecall(t, eng, knowledgeQuestions, recallQuestion)
+	}
+
+	fmt.Println()
+	fmt.Println("─── Recall Question ───")
+	fmt.Printf("  %s\n", recallQuestion)
+	fmt.Println()
+	fmt.Println("─── A) AutoCompact (summary only) ───")
+	for _, line := range wrapLines(answerA, 70) {
+		fmt.Printf("  %s\n", line)
+	}
+	fmt.Println()
+	fmt.Println("─── B) FoldCompact (tail preserved) ───")
+	for _, line := range wrapLines(answerB, 70) {
+		fmt.Printf("  %s\n", line)
+	}
+	fmt.Println()
+	fmt.Println("─── Comparison ───")
+	fmt.Printf("  A: %d chars  |  B: %d chars\n", len(answerA), len(answerB))
+	fmt.Println("=============================================================")
+}
+
+// runWithRecall runs knowledge questions, then a recall question, and returns
+// the recall answer text.
+func runWithRecall(t *testing.T, eng *engine.Engine, knowledge []string, recall string) string {
+	ctx := context.Background()
+
+	for i, q := range knowledge {
+		events := make(chan engine.Event, 256)
+		errCh := make(chan error, 1)
+		go func() { errCh <- eng.Run(ctx, q, events) }()
+		for range events {
+		}
+		if err := <-errCh; err != nil {
+			t.Logf("knowledge turn %d: %v", i+1, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Run recall question and collect the text answer.
+	events := make(chan engine.Event, 256)
+	errCh := make(chan error, 1)
+	var answer strings.Builder
+	go func() {
+		errCh <- eng.Run(ctx, recall, events)
+	}()
+	for evt := range events {
+		if evt.Type == engine.EventText {
+			if text, ok := evt.Data.(string); ok {
+				answer.WriteString(text)
+			}
+		}
+	}
+	if err := <-errCh; err != nil {
+		t.Logf("recall: %v", err)
+	}
+	return answer.String()
+}
+
 // bypassPermMgr always allows tool execution.
 type bypassPermMgr struct{}
 

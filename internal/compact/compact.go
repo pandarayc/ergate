@@ -92,6 +92,19 @@ func MicroCompact(msgs []llm.Message) []llm.Message {
 	return msgs
 }
 
+// toolCallIDs returns the set of tool_call IDs in a message slice.
+func toolCallIDs(msgs []llm.Message) map[string]bool {
+	ids := make(map[string]bool)
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == "tool_use" && b.ID != "" {
+				ids[b.ID] = true
+			}
+		}
+	}
+	return ids
+}
+
 func hasToolResult(m llm.Message) bool {
 	for _, b := range m.Content {
 		if b.Type == "tool_result" {
@@ -102,9 +115,78 @@ func hasToolResult(m llm.Message) bool {
 }
 
 // AutoCompact sends the conversation to the LLM for summarization.
-// Returns compressed messages that should replace the originals.
+// Returns compressed messages that completely replace the originals.
+// Prefer FoldCompact for new code — it preserves recent tail messages for
+// better context continuity and prefix-cache baseline.
 func AutoCompact(ctx context.Context, client llm.LLMClient, messages []llm.Message, model string) ([]llm.Message, error) {
-	raw, _ := json.Marshal(messages)
+	return foldCompact(ctx, client, messages, model, 0)
+}
+
+// FoldCompact sends the conversation prefix (all except the last keepTail
+// messages) to the LLM for summarization, then appends the tail unchanged.
+// The tail messages retain their original byte representation, which preserves
+// context quality and provides a richer prefix-cache baseline for later turns.
+//
+// If keepTail is 0 or >= len(messages), it degrades to AutoCompact behavior.
+func FoldCompact(ctx context.Context, client llm.LLMClient, messages []llm.Message, model string, keepTail int) ([]llm.Message, error) {
+	if keepTail <= 0 || keepTail >= len(messages) {
+		return foldCompact(ctx, client, messages, model, 0)
+	}
+	return foldCompact(ctx, client, messages, model, keepTail)
+}
+
+// DefaultKeepTail is the default number of messages to preserve at the end of
+// a FoldCompact operation. The actual split point is aligned backward to a
+// user-message boundary to avoid breaking tool_call→tool_result pairs.
+const DefaultKeepTail = 3
+
+// foldCompact is the shared implementation.
+func foldCompact(ctx context.Context, client llm.LLMClient, messages []llm.Message, model string, keepTail int) ([]llm.Message, error) {
+	var head, tail []llm.Message
+	if keepTail > 0 && keepTail < len(messages) {
+		split := len(messages) - keepTail
+		if split < 1 {
+			split = 1
+		}
+		// Resolve orphan tool results: if the tail contains a tool_result
+		// whose tool_call is in the head, move split backward to include
+		// that assistant message, keeping the pair together.
+		head = messages[:split]
+		tail = messages[split:]
+		for {
+			orphan := false
+			headIDs := toolCallIDs(head)
+			for _, m := range tail {
+				for _, b := range m.Content {
+					if b.Type == "tool_result" && headIDs[b.ToolUseID] {
+						// Find the assistant message in head that owns this tool_call
+						// and move split to include it in tail.
+						for i := split - 1; i >= 0; i-- {
+							for _, bb := range messages[i].Content {
+								if bb.Type == "tool_use" && bb.ID == b.ToolUseID {
+									split = i
+									orphan = true
+									break
+								}
+							}
+							if orphan {
+								break
+							}
+						}
+					}
+				}
+			}
+			if !orphan || split <= 1 {
+				break
+			}
+			head = messages[:split]
+			tail = messages[split:]
+		}
+	} else {
+		head = messages
+	}
+
+	raw, _ := json.Marshal(head)
 	convText := string(raw)
 	if len(convText) > 80_000 {
 		convText = convText[:80_000]
@@ -137,11 +219,13 @@ func AutoCompact(ctx context.Context, client llm.LLMClient, messages []llm.Messa
 		}
 	}
 
-	return []llm.Message{
-		llm.NewCompactBoundary("auto", EstimateTokens(messages), summary.String()),
+	compacted := []llm.Message{
+		llm.NewCompactBoundary("auto", EstimateTokens(head), summary.String()),
 		llm.NewUserMessage("[Conversation compressed]\n\n" + summary.String()),
 		{Type: llm.MsgAssistant, Role: "assistant", Content: []llm.ContentBlock{{Type: "text", Text: "Understood. Continuing with summary context."}}},
-	}, nil
+	}
+	compacted = append(compacted, tail...)
+	return compacted, nil
 }
 
 // CompactToolSchema returns the JSON schema for the compact tool.
