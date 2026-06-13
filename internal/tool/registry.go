@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -74,6 +75,8 @@ func (r *Registry) ToolNames() []string {
 }
 
 // ToolConfigs returns the tool configurations for the LLM API.
+// Results are sorted alphabetically by name for deterministic serialization,
+// which is critical for provider prefix-cache stability across API calls.
 func (r *Registry) ToolConfigs() []llm.ToolConfig {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -89,6 +92,9 @@ func (r *Registry) ToolConfigs() []llm.ToolConfig {
 			InputSchema: t.InputSchema(),
 		})
 	}
+	sort.Slice(configs, func(i, j int) bool {
+		return configs[i].Name < configs[j].Name
+	})
 	return configs
 }
 
