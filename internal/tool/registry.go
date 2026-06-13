@@ -12,9 +12,15 @@ import (
 )
 
 // Registry manages all available tools.
+// Tool configs and names are cached after first computation and invalidated
+// when tools are registered. This avoids per-turn allocation + sort overhead
+// when the tool set is stable (the common case).
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
+	mu      sync.RWMutex
+	tools   map[string]Tool
+	dirty   bool // cache stale after Register/RegisterRaw
+	cachedC []llm.ToolConfig
+	cachedN []string
 }
 
 // NewRegistry creates a new tool registry.
@@ -34,6 +40,7 @@ func (r *Registry) Register(t Tool) error {
 		return fmt.Errorf("tool %q already registered", name)
 	}
 	r.tools[name] = t
+	r.dirty = true
 	return nil
 }
 
@@ -60,29 +67,60 @@ func (r *Registry) List() []Tool {
 func (r *Registry) RegisterRaw(t Tool) {
 	r.mu.Lock()
 	r.tools[t.Name()] = t
+	r.dirty = true
 	r.mu.Unlock()
 }
 
 // ToolNames returns the names of all registered tools.
 func (r *Registry) ToolNames() []string {
 	r.mu.RLock()
+	if !r.dirty && r.cachedN != nil {
+		defer r.mu.RUnlock()
+		return r.cachedN
+	}
+	r.mu.RUnlock()
+	r.rebuildCaches()
+	r.mu.RLock()
 	defer r.mu.RUnlock()
+	return r.cachedN
+}
+
+// ToolConfigs returns the tool configurations for the LLM API.
+// Results are cached and rebuilt only when tools are registered/unregistered.
+// Sorted alphabetically for deterministic serialization (prefix-cache stability).
+func (r *Registry) ToolConfigs() []llm.ToolConfig {
+	r.mu.RLock()
+	if !r.dirty && r.cachedC != nil {
+		defer r.mu.RUnlock()
+		return r.cachedC
+	}
+	r.mu.RUnlock()
+	r.rebuildCaches()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.cachedC
+}
+
+// rebuildCaches regenerates both cached names and configs under write lock.
+func (r *Registry) rebuildCaches() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.dirty {
+		return // another goroutine already rebuilt
+	}
+
+	// Rebuild names.
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
-	return names
-}
+	sort.Strings(names)
+	r.cachedN = names
 
-// ToolConfigs returns the tool configurations for the LLM API.
-// Results are sorted alphabetically by name for deterministic serialization,
-// which is critical for provider prefix-cache stability across API calls.
-func (r *Registry) ToolConfigs() []llm.ToolConfig {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	// Rebuild configs.
 	configs := make([]llm.ToolConfig, 0, len(r.tools))
-	for _, t := range r.tools {
+	for _, name := range names {
+		t := r.tools[name]
 		if !t.IsEnabled() {
 			continue
 		}
@@ -92,10 +130,8 @@ func (r *Registry) ToolConfigs() []llm.ToolConfig {
 			InputSchema: t.InputSchema(),
 		})
 	}
-	sort.Slice(configs, func(i, j int) bool {
-		return configs[i].Name < configs[j].Name
-	})
-	return configs
+	r.cachedC = configs
+	r.dirty = false
 }
 
 // Searchable is an optional interface for tools with search hints.
