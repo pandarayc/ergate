@@ -18,8 +18,9 @@ import (
 	"github.com/raydraw/ergate/internal/filehistory"
 	"github.com/raydraw/ergate/internal/hooks"
 	"github.com/raydraw/ergate/internal/llm"
-	"github.com/raydraw/ergate/internal/planmode"
+	"github.com/raydraw/ergate/internal/log"
 	"github.com/raydraw/ergate/internal/memory"
+	"github.com/raydraw/ergate/internal/planmode"
 	"github.com/raydraw/ergate/internal/prompt"
 	"github.com/raydraw/ergate/internal/session"
 	"github.com/raydraw/ergate/internal/skill"
@@ -58,7 +59,7 @@ type Engine struct {
 	permissions tool.PermissionManager
 
 	mu          sync.Mutex
-	messages    []llm.Message
+	log         *log.Log
 	usage       llm.Usage
 	turns       []session.TurnMetrics
 	memEntries  []memory.Entry
@@ -99,7 +100,7 @@ func New(cfg *config.Config, client llm.LLMClient, tools *tool.Registry, ectx Co
 		tools:         tools,
 		cfg:           cfg,
 		logger:        slog.Default(),
-		messages:      make([]llm.Message, 0),
+		log:           log.New(),
 		skillReg:      ectx.Skills,
 		hookMgr:       ectx.Hooks,
 		fileTracker:   ectx.FileTracker,
@@ -152,18 +153,14 @@ func matchPermPattern(toolName string, input json.RawMessage, rule tool.Permissi
 
 // Messages returns a copy of the current conversation history.
 func (e *Engine) Messages() []llm.Message {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	result := make([]llm.Message, len(e.messages))
-	copy(result, e.messages)
-	return result
+	return e.log.Messages()
 }
 
 // Clear resets the conversation history and usage counters.
 func (e *Engine) Clear() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.messages = make([]llm.Message, 0)
+	e.log.Clear()
 	e.usage = llm.Usage{}
 	e.openAIDynamicCtxInjected = false
 }
@@ -409,7 +406,7 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 
 	assistantMsg := e.buildAssistantMessage(textBuf.String(), thinkingBuf.String(), toolUseBlocks)
 	e.mu.Lock()
-	e.messages = append(e.messages, assistantMsg)
+	e.log.Append(assistantMsg)
 	e.mu.Unlock()
 
 	if len(toolUseBlocks) == 0 {
@@ -432,8 +429,7 @@ func (e *Engine) singleTurn(ctx context.Context, events chan<- Event, turn int) 
 
 func (e *Engine) buildRequest() *llm.ChatRequest {
 	e.mu.Lock()
-	messages := make([]llm.Message, len(e.messages))
-	copy(messages, e.messages)
+	messages := e.log.Messages()
 	e.mu.Unlock()
 
 	pin := e.promptInput()
@@ -535,7 +531,7 @@ func isGitRepo() bool {
 func (e *Engine) addUserMessage(content string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.messages = append(e.messages, llm.Message{
+	e.log.Append(llm.Message{
 		Role:    "user",
 		Content: []llm.ContentBlock{{Type: "text", Text: content}},
 	})
@@ -642,14 +638,14 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 
 	if len(resultBlocks) > 0 {
 		e.mu.Lock()
-		e.messages = append(e.messages, llm.Message{Role: "user", Content: resultBlocks})
+		e.log.Append(llm.Message{Role: "user", Content: resultBlocks})
 		e.mu.Unlock()
 	}
 }
 
 func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int) {
 	e.mu.Lock()
-	msgCount := len(e.messages)
+	msgCount := e.log.Len()
 	e.mu.Unlock()
 
 	if msgCount < 10 {
@@ -677,8 +673,7 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	}
 
 	e.mu.Lock()
-	messages := make([]llm.Message, len(e.messages))
-	copy(messages, e.messages)
+	messages := e.log.Messages()
 	e.mu.Unlock()
 
 	if !compact.ShouldCompact(messages, threshold) {
@@ -717,9 +712,7 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	e.compactFailures = 0 // reset on success
 	e.compactCount++
 
-	e.mu.Lock()
-	e.messages = messages
-	e.mu.Unlock()
+	e.log.Import(messages)
 }
 
 func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) bool {
@@ -772,7 +765,7 @@ func (e *Engine) pollTaskNotifications(ctx context.Context, events chan<- Event,
 			msg := fmt.Sprintf("Background task [%s] %s (%s): %s", notif.TaskID, notif.Description, notif.Type, notif.Status)
 			events <- Event{Type: EventThinking, Data: msg, Turn: turn}
 			e.mu.Lock()
-			e.messages = append(e.messages, llm.NewSystemMessage(llm.SysInformational, msg, llm.LevelInfo))
+			e.log.Append(llm.NewSystemMessage(llm.SysInformational, msg, llm.LevelInfo))
 			e.mu.Unlock()
 		default:
 			return
@@ -828,12 +821,12 @@ func (e *Engine) fireOnStopHook(ctx context.Context) {
 func (e *Engine) AutoSave(dir string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if len(e.messages) == 0 {
+	if e.log.Len() == 0 {
 		return
 	}
 	os.MkdirAll(dir, 0o700)
 	fname := filepath.Join(dir, fmt.Sprintf("transcript_%d.json", time.Now().Unix()))
-	data, _ := json.Marshal(e.messages)
+	data, _ := json.Marshal(e.log.Messages())
 	os.WriteFile(fname, data, 0o644)
 }
 
@@ -858,8 +851,7 @@ type SessionData struct {
 func (e *Engine) ExportSession() SessionData {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	msgs := make([]llm.Message, len(e.messages))
-	copy(msgs, e.messages)
+	msgs := e.log.Export()
 	turns := make([]session.TurnMetrics, len(e.turns))
 	copy(turns, e.turns)
 	return SessionData{
@@ -874,16 +866,16 @@ func (e *Engine) ExportSession() SessionData {
 func (e *Engine) ImportSession(data SessionData) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.messages = make([]llm.Message, len(data.Messages))
-	copy(e.messages, data.Messages)
+	e.log.Import(data.Messages)
 	e.usage = data.Usage
 	e.turns = make([]session.TurnMetrics, len(data.Turns))
 	copy(e.turns, data.Turns)
 
 	// Detect whether the imported session already has the dynamic context
 	// injected as a user message (for OpenAI prefix cache stability).
-	if len(e.messages) > 0 && e.messages[0].Role == "user" {
-		for _, b := range e.messages[0].Content {
+	msgs := e.log.Messages()
+	if len(msgs) > 0 && msgs[0].Role == "user" {
+		for _, b := range msgs[0].Content {
 			if b.Type == "text" && strings.Contains(b.Text, "## Environment") {
 				e.openAIDynamicCtxInjected = true
 				break
