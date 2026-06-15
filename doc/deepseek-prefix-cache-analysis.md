@@ -279,17 +279,66 @@ Go v1.0 从 TypeScript 版的 DeepSeek-only 演进为多 provider（Anthropic + 
 - **强制比例**：`compactForceRatio = 0.9`，即使 prune 能释放空间也强制 compact
 - **摘要累积**：每次 fold 新增一个摘要消息，不覆盖之前的摘要——防止渐进式事实丢失
 
-## 8. 优化路线图
+## 8. 实现记录
 
-| 优先级 | 改动 | 复杂度 | 预期收益 | 依据 |
-|--------|------|--------|---------|------|
-| **P0** | **Compaction Fold**（尾部保留 + 结构化摘要） | 中 | 上下文质量 + 缓存 baseline | 实验 A: compaction 命中率从 77% 暴跌至 4%；Reasonix Go: fold preserved tail |
-| **P0** | **Prune 大工具结果**（归档到磁盘，替换为指针） | 低 | 释放上下文空间 | Reasonix Go prune: ≥1024 字节替换；ergate 已有 `maxResultChars` 可扩展 |
-| P1 | 工具 Schema 确定性序列化 | 低 | 避免非预期缓存失效 | Reasonix 实践: key 重排直接丢缓存 |
-| P2 | Append-Only 日志抽象 | 高 | 类型系统保证缓存正确性 | DeepSeek 官方: 中间字节改变 → 后续全 miss |
-| ~~P1~~ | ~~Thinking 不入消息历史~~ | — | — | **降级**：Reasonix Go 显式保留 thinking（Anthropic 签名硬约束）；fold+prune 已管住上下文膨胀；ReCAP 消融数据作为后续参考 |
-| P3 | 周期性约束重注入 | 低 | 长会话中防止"规则遗忘" | ReCAP: 每 10 轮注入规则 |
-| P3 | 结构化摘要 | 低 | 更好的 LLM 理解和缓存友好性 | ReCAP: ⟨T, S[1:]⟩ 结构化回注
+### 8.1 已完成的优化
+
+| 优先级 | 改动 | Commit | 实现位置 |
+|--------|------|--------|---------|
+| P0 | **FoldCompact** — compaction 尾部保留 | `282b805` | `internal/compact/compact.go` |
+| P0 | **PruneCompact** — 大工具结果归档 | `49d8b5c` | `internal/compact/compact.go` |
+| P1 | **工具 Schema 确定性序列化** — 排序 + 缓存 | `54f65cc` + `4e662fe` | `internal/tool/registry.go` |
+| P2 | **Append-Only Log 抽象** — 类型系统强制 | `2a8a3e7` | `internal/log/log.go` |
+| P3 | **约束重注入** — 每 N 轮提醒 | `6833388` | `internal/engine/engine.go` |
+
+### 8.2 新增 Config 字段
+
+```yaml
+# compaction configuration
+compact_threshold: 0.8            # fraction of context window, default 0.8
+compact_keep_tail: 3              # messages to preserve at end, default 3
+compact_prune_bytes: 4096         # tool result > this will be archived, default 4096
+compact_constraint_interval: 0    # turns between constraint reminders, 0=disabled
+```
+
+### 8.3 Compaction 三层级联
+
+```
+maybeCompact 触发时:
+
+  Layer 1: SnipCompact     — 剪掉旧 thinking 块（免费，正则替换）
+  Layer 2: PruneCompact    — 大工具结果归档为文件指针（免费，I/O 开销小）
+  Layer 3: FoldCompact     — LLM 摘要 prefix + 保留尾部（付费，API 调用）
+           ↑                                       ↑
+     成本递增                                上下文质量递增
+```
+
+### 8.4 FoldCompact 安全分割
+
+FoldCompact 在切割头/尾时，会向后检查确保不会拆散 tool_call→tool_result 对。如果尾部包含 orphan 工具结果（其 tool_call 在头部），分割点会自动前移以保持配对完整。
+
+### 8.5 最终效果
+
+```
+10 轮 conversation benchmark (deepseek-v4-flash):
+
+优化前:  缓存命中率 60.0%，compaction 当轮命中率 3.9%（悬崖）
+优化后:  缓存命中率 89.1%，compaction 悬崖消失
+
+Turn 分布（优化后）:
+  Turn 1:  67%  → Turn 2: 98% → Turn 3: 76% → Turn 4: 98%
+  Turn 5:  95%  → Turn 6: 99% → Turn 7: 80% → Turn 8: 99%
+  Turn 9:  89%  → Turn 10: 99%
+```
+
+### 8.6 降级/待定项
+
+| 改动 | 状态 | 原因 |
+|------|------|------|
+| Thinking 裁剪 (VolatileScratch) | **降级** | Reasonix Go 显式保留 thinking（Anthropic 签名硬约束）；fold+prune 足够管住上下文；ReCAP 消融数据保留作后续参考 |
+| 结构化摘要 | **待定** | 概念性回忆测试中 LLM 摘要质量已足够好，边际收益不明确 |
+
+## 9. 参考
 
 - [DeepSeek Context Caching 文档](https://api-docs.deepseek.com/guides/kv_cache)
 - [ReCAP: Recursive Context-Aware Reasoning and Planning (NeurIPS 2025)](https://arxiv.org/abs/2510.23822)
