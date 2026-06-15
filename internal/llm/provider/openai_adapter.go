@@ -60,15 +60,17 @@ func buildOpenAIRequestBody(req *llm.ChatRequest, opts requestOpts) map[string]i
 			}
 			continue
 		}
-		m := map[string]interface{}{
-			"role":    msg.Role,
-			"content": openaiConvertContent(msg.Content),
-		}
+
 		if msg.Role == "assistant" {
+			m := map[string]interface{}{"role": "assistant"}
+			var textBuilder strings.Builder
 			var toolCalls []map[string]interface{}
 			var reasoningContent string
 			for _, block := range msg.Content {
-				if block.Type == "tool_use" {
+				switch block.Type {
+				case "text":
+					textBuilder.WriteString(block.Text)
+				case "tool_use":
 					tc := map[string]interface{}{
 						"id":   block.ID,
 						"type": "function",
@@ -78,10 +80,17 @@ func buildOpenAIRequestBody(req *llm.ChatRequest, opts requestOpts) map[string]i
 						},
 					}
 					toolCalls = append(toolCalls, tc)
+				case "thinking":
+					if opts.withReasoning && block.Thinking != "" {
+						reasoningContent += block.Thinking
+					}
 				}
-				if opts.withReasoning && block.Type == "thinking" && block.Thinking != "" {
-					reasoningContent += block.Thinking
-				}
+			}
+			text := textBuilder.String()
+			if text != "" {
+				m["content"] = text
+			} else {
+				m["content"] = nil
 			}
 			if len(toolCalls) > 0 {
 				m["tool_calls"] = toolCalls
@@ -89,8 +98,14 @@ func buildOpenAIRequestBody(req *llm.ChatRequest, opts requestOpts) map[string]i
 			if reasoningContent != "" {
 				m["reasoning_content"] = reasoningContent
 			}
+			messages = append(messages, m)
+			continue
 		}
-		messages = append(messages, m)
+
+		messages = append(messages, map[string]interface{}{
+			"role":    msg.Role,
+			"content": openaiConvertContent(msg.Content),
+		})
 	}
 	apiReq["messages"] = messages
 
@@ -405,7 +420,13 @@ func decodeRawMessage(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return s
 	}
-	return string(raw)
+	// Fallback: raw might be a JSON string literal (e.g. `"hello"` with quotes).
+	// Try to trim surrounding quotes if json.Unmarshal failed for other reasons.
+	trimmed := strings.TrimSpace(string(raw))
+	if len(trimmed) >= 2 && trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"' {
+		trimmed = trimmed[1 : len(trimmed)-1]
+	}
+	return trimmed
 }
 
 func openaiConvertContent(blocks []llm.ContentBlock) interface{} {

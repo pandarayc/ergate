@@ -19,6 +19,7 @@ func renderThinking(m *ChatMessage, width int) string {
 	if overflow && !m.wasFolded {
 		m.Collapsed = true
 		m.wasFolded = true
+		m.Bump()
 	}
 
 	if overflow {

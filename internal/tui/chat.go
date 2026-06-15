@@ -22,7 +22,6 @@ type ChatModel struct {
 
 	// Core UI components.
 	msgList  *list.List
-	messages []*message.ChatMessage
 	input    InputArea
 	toolsBar ToolsBar
 
@@ -73,7 +72,6 @@ func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store) 
 		cfg:          cfg,
 		eng:          eng,
 		msgList:      list.New(80, 20),
-		messages:     make([]*message.ChatMessage, 0),
 		input:        NewInputArea(),
 		toolsBar:     ToolsBar{},
 		engineDone:   engineDone,
@@ -194,16 +192,6 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
-
-
-
-
-
-
-
-
-
 // LoadSession loads a session by ID, clearing the current chat state
 // and importing the session into the engine.
 func (m *ChatModel) LoadSession(id string) {
@@ -216,7 +204,6 @@ func (m *ChatModel) LoadSession(id string) {
 		return
 	}
 	// Clear current chat state before importing.
-	m.messages = nil
 	m.msgList.SetItems(nil)
 	m.eng.ImportSession(engine.SessionData{
 		Messages: sess.Messages,
@@ -231,11 +218,23 @@ func (m *ChatModel) LoadSession(id string) {
 	m.forceScrollBottom = true
 }
 
+
+// lastMsg returns the last message or nil.
+func (m *ChatModel) lastMsg() *message.ChatMessage {
+	if m.msgList.ItemCount() == 0 {
+		return nil
+	}
+	return m.msgList.ItemAt(m.msgList.ItemCount() - 1).(*message.ChatMessage)
+}
+
+// msgCount returns the number of messages.
+func (m *ChatModel) msgCount() int { return m.msgList.ItemCount() }
+
 // View renders the full TUI.
 func (m *ChatModel) View() string {
 	// Scroll to bottom before rendering so the cached content matches
 	// the visible scroll position. Must happen before msgList.Render().
-	if m.forceScrollBottom && len(m.messages) > 0 {
+	if m.forceScrollBottom && m.msgCount() > 0 {
 		m.msgList.ScrollToBottom()
 		m.forceScrollBottom = false
 		m.viewDirty = true
@@ -251,7 +250,7 @@ func (m *ChatModel) View() string {
 	))
 
 	// Welcome page or content.
-	if len(m.messages) == 0 {
+	if m.msgCount() == 0 {
 		b.WriteString(m.welcomeView())
 	} else {
 		b.WriteString(m.msgList.Render())
@@ -314,13 +313,13 @@ func (m *ChatModel) View() string {
 
 	// Status bar.
 	sb := StatusBar{
-		Turn:    m.currentTurn,
-		TotalIn: m.engTotalIn(),
-		TotalOut: m.engTotalOut(),
-		Model:   m.cfg.Model,
+		Turn:       m.currentTurn,
+		TotalIn:    m.engTotalIn(),
+		TotalOut:   m.engTotalOut(),
+		Model:      m.cfg.Model,
 		CacheRatio: m.eng.CacheRatio(),
-		SessionID: m.sessionID,
-		Running: m.running,
+		SessionID:  m.sessionID,
+		Running:    m.running,
 	}
 	bottom.WriteString(accentBar + sb.View())
 
@@ -594,7 +593,6 @@ func (m *ChatModel) refreshToolsBar() {
 
 // appendMessage adds a message to the list and updates the list.
 func (m *ChatModel) appendMessage(msg *message.ChatMessage) {
-	m.messages = append(m.messages, msg)
 	m.msgList.AppendItems(msg)
 	m.viewDirty = true
 }
@@ -606,14 +604,11 @@ func (m *ChatModel) flushStream() {
 		return
 	}
 	// Append to existing message if it matches role, otherwise create new.
-	if len(m.messages) > 0 {
-		last := m.messages[len(m.messages)-1]
-		if last.Role == role {
-			last.AppendContent(text)
-			m.msgList.UpdateItem(len(m.messages) - 1)
-			m.viewDirty = true
-			return
-		}
+	if last := m.lastMsg(); last != nil && last.Role == role {
+		last.AppendContent(text)
+		m.msgList.UpdateItem(m.msgCount() - 1)
+		m.viewDirty = true
+		return
 	}
 	msg := message.New(role, text)
 	m.appendMessage(msg)
@@ -685,8 +680,8 @@ func (m *ChatModel) handleEngineEvent(event engine.Event) {
 
 	case engine.EventDone:
 		m.flushStream()
-		if len(m.messages) > 0 {
-			m.messages[len(m.messages)-1].Finish()
+		if last := m.lastMsg(); last != nil {
+			last.Finish()
 		}
 		m.running = false
 		m.currentToolName = ""
@@ -740,7 +735,6 @@ func (m *ChatModel) handleCommand(input string) tea.Cmd {
 		m.saveSession()
 	case "/clear":
 		m.eng.Clear()
-		m.messages = nil
 		m.msgList.SetItems(nil)
 	case "/save":
 		m.saveSession()

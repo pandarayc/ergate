@@ -51,6 +51,9 @@ type SkillInfo struct {
 //	  Environment context
 //	  Available skills
 //	  Plan mode (when active)
+//
+// For OpenAI-compatible providers (DeepSeek), prefer BuildStable + BuildDynamicContext
+// to keep the system message immutable for prefix-cache stability.
 func Build(in Input) string {
 	var parts []string
 
@@ -151,5 +154,34 @@ You are in PLAN MODE. In this mode:
 - When ready, use the ExitPlanMode tool to request plan approval
 
 Follow the design phase carefully. Do not implement anything yet.`
+}
+
+// BuildStable returns only the cache-safe prefix (identity + memory + agent).
+// This is suitable for providers that use automatic prefix caching (DeepSeek/OpenAI),
+// where the system message must remain byte-identical between requests.
+func BuildStable(in Input) string {
+	var parts []string
+	parts = append(parts, identitySection())
+	if len(in.Memory) > 0 {
+		parts = append(parts, memorySection(in.Memory))
+	}
+	if in.Agent != nil {
+		parts = append(parts, agentInstructionsSection(*in.Agent))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// BuildDynamicContext returns the environment, skills, and plan-mode sections
+// that should be injected outside the cacheable prefix (e.g. as the first user message).
+func BuildDynamicContext(in Input) string {
+	var parts []string
+	parts = append(parts, environmentSection(in.CWD, in.CurrentDate, in.Shell, in.IsGitRepo))
+	if len(in.Skills) > 0 {
+		parts = append(parts, skillsSection(in.Skills))
+	}
+	if in.InPlanMode {
+		parts = append(parts, planModeSection())
+	}
+	return strings.Join(parts, "\n")
 }
 

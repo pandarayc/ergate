@@ -12,6 +12,7 @@ type StatusBar struct {
 	Turn       int
 	TotalIn    int
 	TotalOut   int
+	LastTurnIn int // last turn input tokens for ctx% (current buffer utilization)
 	Model      string
 	CacheRatio int
 	SessionID  string
@@ -32,14 +33,19 @@ type StatusBar struct {
 
 // View renders the status bar as a single line.
 func (s StatusBar) View() string {
-	totalTokens := s.TotalIn + s.TotalOut
+	// ctx% = last turn input tokens / context window (current buffer utilization).
+	// Falls back to TotalIn if no last-turn data (legacy compatibility).
+	ctxIn := s.LastTurnIn
+	if ctxIn <= 0 {
+		ctxIn = s.TotalIn
+	}
 	ctxWindow := s.ContextWindow
 	if ctxWindow <= 0 {
 		ctxWindow = 128000
 	}
 	ctxPct := 0
-	if totalTokens > 0 {
-		ctxPct = totalTokens * 100 / ctxWindow
+	if ctxIn > 0 {
+		ctxPct = ctxIn * 100 / ctxWindow
 	}
 	cost := estimateCost(s.Model, s.TotalIn, s.TotalOut, s.ModelOpts)
 
