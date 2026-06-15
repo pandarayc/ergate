@@ -76,6 +76,7 @@ type Engine struct {
 	transcriptDir string
 	compactFailures int // circuit breaker for AutoCompact
 	compactCount     int // number of successful compactions performed
+	turnCount        int // total turns across all Run calls, for periodic reminders
 }
 
 // Context holds the optional subsystems available to the engine.
@@ -243,6 +244,7 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 		}
 
 		e.pollTaskNotifications(ctx, events, turn)
+		e.maybeInjectConstraint()
 		e.maybeCompact(ctx, events, turn)
 
 		hasTools, err := e.singleTurn(ctx, events, turn)
@@ -641,6 +643,28 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 		e.log.Append(llm.Message{Role: "user", Content: resultBlocks})
 		e.mu.Unlock()
 	}
+}
+
+// maybeInjectConstraint periodically injects a constraint reminder to
+// prevent rule amnesia during long sessions. Following ReCAP's pattern of
+// re-injecting rules every ~10 LLM invocations.
+func (e *Engine) maybeInjectConstraint() {
+	interval := e.cfg.CompactConstraintInterval
+	if interval <= 0 {
+		return
+	}
+	e.turnCount++
+	if e.turnCount%interval != 0 {
+		return
+	}
+
+	// Build a lightweight, deterministic reminder.
+	reminder := fmt.Sprintf(
+		"[Constraint reminder — turn %d] Working directory: %s. "+
+			"Use the available tools. Do not modify files outside the workspace.",
+		e.turnCount, cwd(),
+	)
+	e.log.Append(llm.NewSystemMessage(llm.SysInformational, reminder, llm.LevelInfo))
 }
 
 func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int) {

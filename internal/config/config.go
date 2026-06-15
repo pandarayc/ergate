@@ -73,9 +73,10 @@ type Config struct {
 	Temperature float64 `mapstructure:"temperature"`
 
 	// Compaction
-	CompactThreshold  float64 `mapstructure:"compact_threshold"`   // fraction of context window, default 0.8
-	CompactKeepTail   int     `mapstructure:"compact_keep_tail"`    // messages to preserve at end, default 3
-	CompactPruneBytes int     `mapstructure:"compact_prune_bytes"`  // tool result > this will be archived, default 4096
+	CompactThreshold         float64 `mapstructure:"compact_threshold"`          // fraction of context window, default 0.8
+	CompactKeepTail          int     `mapstructure:"compact_keep_tail"`           // messages to preserve at end, default 3
+	CompactPruneBytes        int     `mapstructure:"compact_prune_bytes"`         // tool result > this will be archived, default 4096
+	CompactConstraintInterval int    `mapstructure:"compact_constraint_interval"` // turns between constraint reminders, 0=disabled
 
 	// Permissions
 	PermissionMode PermissionMode `mapstructure:"permission_mode"`
