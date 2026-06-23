@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/engine"
 	"github.com/raydraw/ergate/internal/llm"
-	"github.com/raydraw/ergate/internal/session"
 	"github.com/raydraw/ergate/internal/tui/list"
 	"github.com/raydraw/ergate/internal/tui/message"
 )
@@ -45,10 +45,6 @@ type ChatModel struct {
 	forceScrollBottom bool
 	hideThinking      bool
 
-	// Session persistence.
-	sessionStore *session.Store
-	sessionID    string
-
 	// Overlay support — reuses existing OverlayManager from overlay.go.
 	overlays OverlayManager
 
@@ -64,19 +60,18 @@ type ChatModel struct {
 }
 
 // NewChatModel creates a new chat model.
-func NewChatModel(cfg *config.Config, eng *engine.Engine, store *session.Store) *ChatModel {
+func NewChatModel(cfg *config.Config, eng *engine.Engine) *ChatModel {
 	engineDone := make(chan struct{})
 	close(engineDone)
 
 	return &ChatModel{
-		cfg:          cfg,
-		eng:          eng,
-		msgList:      list.New(80, 20),
-		input:        NewInputArea(),
-		toolsBar:     ToolsBar{},
-		engineDone:   engineDone,
-		stream:       message.NewStreamBuffer(),
-		sessionStore: store,
+		cfg:        cfg,
+		eng:        eng,
+		msgList:    list.New(80, 20),
+		input:      NewInputArea(),
+		toolsBar:   ToolsBar{},
+		engineDone: engineDone,
+		stream:     message.NewStreamBuffer(),
 	}
 }
 
@@ -195,23 +190,15 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 // LoadSession loads a session by ID, clearing the current chat state
 // and importing the session into the engine.
 func (m *ChatModel) LoadSession(id string) {
-	if m.sessionStore == nil {
-		return
-	}
-	sess, err := m.sessionStore.Load(id)
-	if err != nil || sess == nil {
+	if err := m.eng.LoadSession(id); err != nil {
 		m.appendMessage(message.New("error", fmt.Sprintf("load session %s: %v", id, err)))
 		return
 	}
 	// Clear current chat state before importing.
 	m.msgList.SetItems(nil)
-	m.eng.ImportSession(engine.SessionData{
-		Messages: sess.Messages,
-		Usage:    sess.Usage,
-	})
-	m.sessionID = sess.ID
+	sessID := m.eng.SessionID()
 	m.appendMessage(message.New("system",
-		fmt.Sprintf("[Restored session: %s \u2014 %d messages]", sess.ID, len(sess.Messages))))
+		fmt.Sprintf("[Restored session: %s]", sessID)))
 	for _, msg := range m.eng.Messages() {
 		m.appendConvertedMessages(msg)
 	}
@@ -318,7 +305,7 @@ func (m *ChatModel) View() string {
 		TotalOut:   m.engTotalOut(),
 		Model:      m.cfg.Model,
 		CacheRatio: m.eng.CacheRatio(),
-		SessionID:  m.sessionID,
+		SessionID:  m.eng.SessionID(),
 		Running:    m.running,
 	}
 	bottom.WriteString(accentBar + sb.View())
@@ -330,11 +317,12 @@ func (m *ChatModel) View() string {
 		o := m.overlays.Active()
 		switch o.Kind {
 		case OverlayPermission:
-			// Permission is inline — already accounted for by viewport height reduction.
-			return result
-		case OverlayDetail:
-			detailView := renderDetailOverlay(o, m.width, m.height)
-			return lipgloss.JoinVertical(lipgloss.Left, wrapped, detailView)
+			permView := renderPermissionOverlay(o, m.width)
+			return lipgloss.JoinVertical(lipgloss.Left, wrapped, permView)
+		case OverlayDetail, OverlayToolChain:
+			availableH := m.height / 2
+			detailView := renderDetailOverlay(o, m.width, availableH)
+			return lipgloss.JoinVertical(lipgloss.Left, wrapped, detailView, bottom.String())
 		}
 	}
 
@@ -379,6 +367,9 @@ func (m *ChatModel) overlayReservedHeight() int {
 	o := m.overlays.Active()
 	if o.Kind == OverlayPermission {
 		return 8 // permission dialog fixed height
+	}
+	if o.Kind == OverlayToolChain {
+		return m.height / 2
 	}
 	return 0 // detail/session picker are modals rendered outside viewport
 }
@@ -524,6 +515,9 @@ func (m *ChatModel) handleItemClick(x, y int) tea.Cmd {
 	if item == nil {
 		return nil
 	}
+	if msg, ok := item.(*message.ChatMessage); ok && msg.Role == "toolchain" {
+		return m.openToolChainOverlayFor(msg)
+	}
 	if handler, ok := item.(list.MouseHandler); ok {
 		if handler.HandleMouseClick(list.MouseButtonLeft, x, itemY) {
 			return nil
@@ -632,32 +626,27 @@ func (m *ChatModel) handleEngineEvent(event engine.Event) {
 		}
 
 	case engine.EventToolUse:
-		m.flushStream()
 		if data, ok := event.Data.(map[string]any); ok {
 			name, _ := data["name"].(string)
-			input, _ := data["input"].(string)
-			msg := message.NewTool("⚙ "+name, input)
-			m.appendMessage(msg)
 			m.currentToolName = name
 		}
 		m.refreshToolsBar()
-		m.forceScrollBottom = true
 
 	case engine.EventToolResult:
 		m.flushStream()
 		m.currentToolName = ""
 		m.refreshToolsBar()
+
+	case engine.EventToolChain:
+		m.flushStream()
+		m.currentToolName = ""
 		if data, ok := event.Data.(map[string]any); ok {
-			content, _ := data["content"].(string)
-			isError, _ := data["is_error"].(bool)
-			if isError {
-				m.appendMessage(message.New("error", content))
-			} else {
-				msg := message.NewTool(content, content)
-				msg.Finish()
+			msg := message.NewToolChain(data)
+			if msg != nil {
 				m.appendMessage(msg)
 			}
 		}
+		m.refreshToolsBar()
 		m.forceScrollBottom = true
 
 	case engine.EventError:
@@ -705,23 +694,9 @@ func (m *ChatModel) listenEvents() tea.Cmd {
 	}
 }
 
-// saveSession persists the current conversation.
+// saveSession delegates to the engine for session persistence.
 func (m *ChatModel) saveSession() {
-	if m.sessionStore == nil {
-		return
-	}
-	data := m.eng.ExportSession()
-	sess := &session.Session{
-		ID:       m.sessionID,
-		Model:    m.cfg.Model,
-		Messages: data.Messages,
-		Usage:    data.Usage,
-		Turns:    data.Turns,
-	}
-	if err := m.sessionStore.Save(sess); err == nil {
-		m.sessionID = sess.ID
-		m.sessionStore.Prune(20)
-	}
+	m.eng.SaveSession()
 }
 
 // handleCommand processes slash commands. Migrated from chat_events.go:314-417.
@@ -779,7 +754,7 @@ func (m *ChatModel) handleCommand(input string) tea.Cmd {
 		in, out := m.eng.TotalUsage()
 		m.appendMessage(message.New("system", fmt.Sprintf(
 			"Model:%s  Messages:%d  Tokens(in:%d out:%d)  Session:%s",
-			m.cfg.Model, len(msgs), in, out, m.sessionID,
+			m.cfg.Model, len(msgs), in, out, m.eng.SessionID(),
 		)))
 	default:
 		m.appendMessage(message.New("system", fmt.Sprintf("Unknown command: %s", parts[0])))
@@ -787,9 +762,63 @@ func (m *ChatModel) handleCommand(input string) tea.Cmd {
 	return nil
 }
 
+func formatToolChainDetail(detail string) string {
+	var items []struct {
+		Name    string `json:"name"`
+		Input   string `json:"input"`
+		Content string `json:"content"`
+		IsError bool   `json:"is_error"`
+	}
+	if json.Unmarshal([]byte(detail), &items) != nil {
+		return detail
+	}
+	var b strings.Builder
+	sep := strings.Repeat("─", 40)
+	for i, it := range items {
+		status := "✓"
+		if it.IsError {
+			status = "✗"
+		}
+		b.WriteString(fmt.Sprintf("── %s %s %s\n", it.Name, status, sep))
+		b.WriteString(it.Content)
+		if i < len(items)-1 {
+			b.WriteString("\n\n")
+		}
+	}
+	return b.String()
+}
+
+// openToolChainOverlay opens the most recent tool chain as a pop layer.
+func (m *ChatModel) openToolChainOverlay() tea.Cmd {
+	for i := m.msgList.ItemCount() - 1; i >= 0; i-- {
+		msg := m.msgList.ItemAt(i).(*message.ChatMessage)
+		if msg.Role == "toolchain" {
+			return m.openToolChainOverlayFor(msg)
+		}
+	}
+	return nil
+}
+
+// openToolChainOverlayFor opens the pop layer for a specific tool chain message.
+func (m *ChatModel) openToolChainOverlayFor(msg *message.ChatMessage) tea.Cmd {
+	detailContent := formatToolChainDetail(msg.Detail)
+	if detailContent == "" {
+		detailContent = msg.Content
+	}
+	o := &Overlay{
+		Kind:          OverlayToolChain,
+		DetailTitle:   msg.ChainSummary,
+		DetailContent: detailContent,
+	}
+	m.overlays.Show(o)
+	m.viewDirty = true
+	return nil
+}
+
+
 func (m *ChatModel) handleResume(parts []string) tea.Cmd {
-	if m.sessionStore == nil {
-		m.appendMessage(message.New("error", "No session store available."))
+	if m.eng == nil {
+		m.appendMessage(message.New("error", "Session service not available."))
 		return nil
 	}
 	m.saveSession()
@@ -799,7 +828,7 @@ func (m *ChatModel) handleResume(parts []string) tea.Cmd {
 }
 
 func (m *ChatModel) handleLoad(parts []string) tea.Cmd {
-	if m.sessionStore == nil || len(parts) < 2 {
+	if m.eng == nil || len(parts) < 2 {
 		return nil
 	}
 	m.LoadSession(parts[1])

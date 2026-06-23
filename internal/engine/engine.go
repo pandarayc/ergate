@@ -39,16 +39,25 @@ type Event struct {
 type EventType string
 
 const (
-	EventText        EventType = "text"
-	EventThinking    EventType = "thinking"
-	EventTodoReminder EventType = "todo_reminder"
-	EventToolUse     EventType = "tool_use"
-	EventToolResult  EventType = "tool_result"
-	EventError       EventType = "error"
-	EventTurnEnd     EventType = "turn_end"
-	EventDone        EventType = "done"
-	EventAborted     EventType = "aborted"
+	EventText          EventType = "text"
+	EventThinking      EventType = "thinking"
+	EventTodoReminder  EventType = "todo_reminder"
+	EventToolUse       EventType = "tool_use"
+	EventToolResult    EventType = "tool_result"
+	EventToolChain     EventType = "tool_chain" // merged tool results for one turn
+	EventError         EventType = "error"
+	EventTurnEnd       EventType = "turn_end"
+	EventDone          EventType = "done"
+	EventAborted       EventType = "aborted"
 )
+
+// ToolChainItem is a single tool's execution result within a tool chain.
+type ToolChainItem struct {
+	Name    string `json:"name"`
+	Input   string `json:"input"`   // JSON-encoded tool input
+	Content string `json:"content"` // full tool output
+	IsError bool   `json:"is_error"`
+}
 
 // Engine is the core query processing loop.
 type Engine struct {
@@ -77,6 +86,9 @@ type Engine struct {
 	compactFailures int // circuit breaker for AutoCompact
 	compactCount     int // number of successful compactions performed
 	turnCount        int // total turns across all Run calls, for periodic reminders
+
+	sessionService session.Service
+	sessionID      string
 }
 
 // Context holds the optional subsystems available to the engine.
@@ -89,30 +101,32 @@ type Context struct {
 	TranscriptDir string
 	TaskNotify    <-chan task.Notification
 	TodoMgr       *tool.TodoManager
-	PermMgr       tool.PermissionManager
-	Memory        []memory.Entry
-	Agent         *memory.Entry
+	PermMgr         tool.PermissionManager
+	Memory          []memory.Entry
+	Agent           *memory.Entry
+	SessionService  session.Service
 }
 
 // New creates a new Engine.
 func New(cfg *config.Config, client llm.LLMClient, tools *tool.Registry, ectx Context) *Engine {
 	return &Engine{
-		client:        client,
-		tools:         tools,
-		cfg:           cfg,
-		logger:        slog.Default(),
-		log:           log.New(),
-		skillReg:      ectx.Skills,
-		hookMgr:       ectx.Hooks,
-		fileTracker:   ectx.FileTracker,
-		planMgr:       ectx.PlanMgr,
-		permCtx:       ectx.PermCtx,
-		transcriptDir: ectx.TranscriptDir,
-		taskNotify:    ectx.TaskNotify,
-		todoMgr:       ectx.TodoMgr,
-		permissions:   ectx.PermMgr,
-		memEntries:    ectx.Memory,
-		agentEntry:    ectx.Agent,
+		client:         client,
+		tools:          tools,
+		cfg:            cfg,
+		logger:         slog.Default(),
+		log:            log.New(),
+		skillReg:       ectx.Skills,
+		hookMgr:        ectx.Hooks,
+		fileTracker:    ectx.FileTracker,
+		planMgr:        ectx.PlanMgr,
+		permCtx:        ectx.PermCtx,
+		transcriptDir:  ectx.TranscriptDir,
+		taskNotify:     ectx.TaskNotify,
+		todoMgr:        ectx.TodoMgr,
+		permissions:    ectx.PermMgr,
+		memEntries:     ectx.Memory,
+		agentEntry:     ectx.Agent,
+		sessionService: ectx.SessionService,
 	}
 }
 
@@ -232,6 +246,7 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 			e.AutoSave(e.transcriptDir)
 		}
 	}()
+	defer e.SaveSession()
 
 	e.addUserMessage(input)
 
@@ -572,35 +587,46 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 	}
 
 	var resultBlocks []llm.ContentBlock
+	var chainItems []ToolChainItem
 
 	for _, tu := range toolUses {
 		behavior := e.checkPermRules(tu.Name, tu.Input)
 		if behavior == tool.BehaviorDeny {
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("permission denied by rule for %s", tu.Name), events, turn))
+			err := fmt.Errorf("permission denied by rule for %s", tu.Name)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
 		}
 
 		t, ok := e.tools.Get(tu.Name)
 		if !ok {
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("unknown tool: %q", tu.Name), events, turn))
+			err := fmt.Errorf("unknown tool: %q", tu.Name)
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
 		}
 
 		if !t.IsReadOnly(tu.Input) && e.permissions != nil && behavior == tool.BehaviorAsk {
 			if err := e.permissions.Check(ctx, tu.Name, tu.Input); err != nil {
-				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("permission denied: %w", err), events, turn))
+				err := fmt.Errorf("permission denied: %w", err)
+				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+				chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 				continue
 			}
 		}
 
 		if !e.firePreToolHook(ctx, tu) {
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("tool blocked by hook"), events, turn))
+			err := fmt.Errorf("tool blocked by hook")
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
 		}
 
 		if e.planMgr != nil && e.planMgr.InPlanMode() && !t.IsReadOnly(tu.Input) && tu.Name != "ExitPlanMode" {
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf(
-				"plan mode: only read-only tools allowed. Use ExitPlanMode to approve the plan and start implementing."), events, turn))
+			err := fmt.Errorf(
+				"plan mode: only read-only tools allowed. Use ExitPlanMode to approve the plan and start implementing.")
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
 		}
 
@@ -620,18 +646,23 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 
 		if t.IsReadOnly(tu.Input) {
 			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		} else if e.permissions != nil {
 			allowed, err := e.permissions.Prompt(ctx, tu.Name, fmt.Sprintf("Run %s?", tu.Name))
 			if err != nil || !allowed {
-				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, fmt.Errorf("user denied permission for %s", tu.Name), events, turn))
+				err := fmt.Errorf("user denied permission for %s", tu.Name)
+				resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
+				chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 				continue
 			}
 			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		} else {
 			result, execErr = e.safeExecute(ctx, t, tu.Input, execCtx)
-			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr, events, turn))
+			resultBlocks = append(resultBlocks, e.handleToolResult(tu, result, execErr))
+			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		}
 
 		e.firePostToolHook(ctx, tu, result, execErr)
@@ -643,6 +674,35 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 		e.log.Append(llm.Message{Role: "user", Content: resultBlocks})
 		e.mu.Unlock()
 	}
+
+	if len(chainItems) > 0 {
+		// JSON-serialise to avoid cross-package type assertion issues
+		// ([]ToolChainItem cannot be asserted as []interface{} in message package).
+		itemsJSON, _ := json.Marshal(chainItems)
+		events <- Event{
+			Type: EventToolChain,
+			Data: map[string]any{
+				"items": string(itemsJSON),
+			},
+			Turn: turn,
+		}
+	}
+}
+
+// makeToolChainItem creates a ToolChainItem from a tool execution result.
+func (e *Engine) makeToolChainItem(tu llm.ToolUseBlock, result *tool.ToolResult, err error) ToolChainItem {
+	item := ToolChainItem{
+		Name:  tu.Name,
+		Input: string(tu.Input),
+	}
+	if err != nil {
+		item.Content = fmt.Sprintf("Error: %v", err)
+		item.IsError = true
+	} else if result != nil {
+		item.Content = result.Content
+		item.IsError = !result.Success
+	}
+	return item
 }
 
 // maybeInjectConstraint periodically injects a constraint reminder to
@@ -917,9 +977,110 @@ func (e *Engine) TurnMetrics() []session.TurnMetrics {
 	return out
 }
 
+// --- Session management ---
+
+// SessionInfo is a lightweight view of a session for listing.
+type SessionInfo struct {
+	ID           string
+	UpdatedAt    time.Time
+	MessageCount int
+	Model        string
+}
+
+// SetSessionID sets the current session ID.
+func (e *Engine) SetSessionID(id string) {
+	e.sessionID = id
+}
+
+// SessionID returns the current session ID.
+func (e *Engine) SessionID() string {
+	return e.sessionID
+}
+
+// LoadSession loads a session from the service and restores engine state.
+func (e *Engine) LoadSession(id string) error {
+	if e.sessionService == nil {
+		return fmt.Errorf("session service not configured")
+	}
+	resp, err := e.sessionService.Get(context.Background(), &session.GetRequest{SessionID: id})
+	if err != nil {
+		return fmt.Errorf("load session %s: %w", id, err)
+	}
+	if resp == nil || resp.Session == nil {
+		return fmt.Errorf("session %s not found", id)
+	}
+	sess := resp.Session
+	e.ImportSession(SessionData{
+		Messages: sess.Messages,
+		Usage:    sess.Usage,
+		Turns:    sess.Turns,
+	})
+	e.sessionID = sess.ID
+	return nil
+}
+
+// ListSessions returns all sessions from the service.
+func (e *Engine) ListSessions() ([]SessionInfo, error) {
+	if e.sessionService == nil {
+		return nil, nil
+	}
+	resp, err := e.sessionService.List(context.Background(), &session.ListRequest{})
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]SessionInfo, len(resp.Sessions))
+	for i, s := range resp.Sessions {
+		infos[i] = SessionInfo{
+			ID:           s.ID,
+			UpdatedAt:    s.UpdatedAt,
+			MessageCount: len(s.Messages),
+			Model:        s.Model,
+		}
+	}
+	return infos, nil
+}
+
+// DeleteSession removes a session from the service.
+func (e *Engine) DeleteSession(id string) error {
+	if e.sessionService == nil {
+		return nil
+	}
+	return e.sessionService.Delete(context.Background(), &session.DeleteRequest{SessionID: id})
+}
+
+// HasSessions returns true if any sessions exist.
+func (e *Engine) HasSessions() bool {
+	infos, err := e.ListSessions()
+	if err != nil {
+		return false
+	}
+	return len(infos) > 0
+}
+
+// SaveSession persists the current engine state to the session service.
+func (e *Engine) SaveSession() {
+	if e.sessionService == nil {
+		return
+	}
+	// Generate session ID on first save.
+	if e.sessionID == "" {
+		e.sessionID = fmt.Sprintf("session_%d", time.Now().Unix())
+	}
+	data := e.ExportSession()
+	sess := &session.Session{
+		ID:       e.sessionID,
+		Model:    e.cfg.Model,
+		Messages: data.Messages,
+		Usage:    data.Usage,
+		Turns:    data.Turns,
+	}
+	_ = e.sessionService.Save(context.Background(), sess)
+	e.sessionService.Prune(context.Background(), 20)
+}
+
 const maxResultChars = 20_000
 
-func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, err error, events chan<- Event, turn int) llm.ContentBlock {
+func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, err error) llm.ContentBlock {
 	var content string
 	var isError bool
 
@@ -943,7 +1104,6 @@ func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, 
 				"[Tool result saved to %s (%d bytes)]\n\nFirst 1000 chars:\n%s\n\nUse Read with file_path=%q to view the full result or Grep to search it.",
 				fname, len(content), summary, fname,
 			)
-			events <- Event{Type: EventThinking, Data: fmt.Sprintf("Large result offloaded to %s", fname), Turn: turn}
 		}
 	}
 
@@ -953,17 +1113,6 @@ func (e *Engine) handleToolResult(tu llm.ToolUseBlock, result *tool.ToolResult, 
 		ToolUseID: tu.ID,
 		Content:   json.RawMessage(encoded),
 		IsError:   isError,
-	}
-
-	events <- Event{
-		Type: EventToolResult,
-		Data: map[string]any{
-			"tool_use_id": tu.ID,
-			"name":        tu.Name,
-			"content":     content,
-			"is_error":    isError,
-		},
-		Turn: turn,
 	}
 
 	return block

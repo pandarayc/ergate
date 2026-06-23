@@ -3,20 +3,14 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/raydraw/ergate/internal/session"
+	"github.com/raydraw/ergate/internal/engine"
 )
 
 // SessionItem holds session metadata for the picker list.
-type SessionItem struct {
-	ID           string
-	UpdatedAt    time.Time
-	MessageCount int
-	Model        string
-}
+type SessionItem = engine.SessionInfo
 
 // SessionAction is the result of user interaction with the session page.
 type SessionAction int
@@ -38,8 +32,8 @@ type SwitchToChatPageMsg struct {
 
 // SessionPage is the full-screen session browser page.
 type SessionPage struct {
-	store  *session.Store
-	items  []SessionItem
+	eng    *engine.Engine
+	items  []engine.SessionInfo
 	cursor int
 	scroll int
 	width  int
@@ -47,9 +41,9 @@ type SessionPage struct {
 }
 
 // NewSessionPage creates a new session page and loads session items.
-func NewSessionPage(store *session.Store, width, height int) SessionPage {
+func NewSessionPage(eng *engine.Engine, width, height int) SessionPage {
 	sp := SessionPage{
-		store:  store,
+		eng:    eng,
 		width:  width,
 		height: height,
 	}
@@ -57,30 +51,18 @@ func NewSessionPage(store *session.Store, width, height int) SessionPage {
 	return sp
 }
 
-// LoadItems refreshes the session list from the store.
+// LoadItems refreshes the session list from the engine.
 func (sp *SessionPage) LoadItems() {
-	if sp.store == nil {
+	if sp.eng == nil {
 		sp.items = nil
 		return
 	}
-	ids, err := sp.store.List()
+	infos, err := sp.eng.ListSessions()
 	if err != nil {
 		sp.items = nil
 		return
 	}
-	sp.items = make([]SessionItem, 0, len(ids))
-	for _, id := range ids {
-		sess, err := sp.store.Load(id)
-		if err != nil {
-			continue
-		}
-		sp.items = append(sp.items, SessionItem{
-			ID:           sess.ID,
-			UpdatedAt:    sess.UpdatedAt,
-			MessageCount: len(sess.Messages),
-			Model:        sess.Model,
-		})
-	}
+	sp.items = infos
 	// Clamp cursor after reload.
 	if sp.cursor >= len(sp.items) {
 		sp.cursor = len(sp.items) - 1
@@ -213,9 +195,9 @@ func (sp SessionPage) Update(msg tea.Msg) (SessionPage, tea.Cmd) {
 					return SwitchToChatPageMsg{}
 				}
 			case 'd', 'D':
-				if sp.cursor >= 0 && sp.cursor < len(sp.items) && sp.store != nil {
+				if sp.cursor >= 0 && sp.cursor < len(sp.items) && sp.eng != nil {
 					id := sp.items[sp.cursor].ID
-					_ = sp.store.Delete(id)
+					_ = sp.eng.DeleteSession(id)
 					sp.LoadItems()
 					if sp.cursor >= len(sp.items) {
 						sp.cursor = len(sp.items) - 1

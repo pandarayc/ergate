@@ -17,6 +17,7 @@ import (
 	"github.com/raydraw/ergate/internal/planmode"
 	"github.com/raydraw/ergate/internal/worktree"
 	"github.com/raydraw/ergate/internal/memory"
+	"github.com/raydraw/ergate/internal/session"
 	"github.com/raydraw/ergate/internal/skill"
 	"github.com/raydraw/ergate/internal/task"
 	"github.com/raydraw/ergate/internal/tool"
@@ -67,6 +68,12 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 
 	taskReg := task.NewRegistry()
 	memDir := memory.Dir(cwd)
+
+	sessionSvc, err := session.NewFileService(cfg.SessionDir)
+	if err != nil {
+		sessionSvc = nil // non-fatal; session persistence degrades gracefully
+	}
+
 	ectx := engine.Context{
 		Skills:        skillReg,
 		Hooks:         hooks.NewManager(),
@@ -82,6 +89,7 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 			AlwaysDenyRules:  make(map[string][]tool.PermissionRule),
 			AlwaysAskRules:   make(map[string][]tool.PermissionRule),
 		},
+		SessionService: sessionSvc,
 	}
 	if entries, err := memory.LoadAll(memDir); err == nil {
 		ectx.Memory = entries
