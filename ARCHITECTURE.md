@@ -93,12 +93,25 @@ User Input → Engine.Run()
 
 ## Roadmap
 
+> 产品需求来源：[product-analysis-migration.md](.ergate/docs/product-analysis-migration.md)
+> 
+> 核心论点：ergate 的差异化不在功能数量，而在 **(1) Go 单二进制 (2) Go 工具链深度绑定 (3) Cache 稳定性类型系统保证**。
+> 迁移的关键一步是 **Claude Code 兼容层** — 一键导入配置/skill/memory，零摩擦切换。
+
 ### Phase A — Stability & Usability (current)
 
 - [x] A.1 Headless permission fix — read-only tools skip interactive Check
 - [ ] A.2 HTTP 400 fix — tool result content encoding
 - [ ] A.3 TUI quick fixes (8 items, see `.ergate/docs/tui-roadmap.md` Phase 1)
 - [ ] A.4 TUI structural refactor (4 items, see `.ergate/docs/tui-roadmap.md` Phase 2)
+
+#### A.5 TUI 交互体验（设计见 `.ergate/docs/tui-interaction-design.md`）
+
+- [ ] **A.5a 工具输出头尾摘要** — 常态显示文件名+行号+头尾锚点，省略中间
+- [ ] **A.5b Ctrl+O Pop Layer** — 覆盖式展开最近工具链详情，不推 viewport
+- [ ] **A.5c 自清除退出** — 打任意可见字符 = 关闭 pop layer + 接收输入
+- [ ] **A.5d 引擎工具链合并** — 同一 turn 连续工具调用合并为 ToolChain 事件
+- [ ] **A.5e 权限单键化** — y/n/a 替换方向键+Enter，显示完整选项文字
 
 ### Phase B — Quality
 
@@ -107,10 +120,20 @@ User Input → Engine.Run()
 - [ ] B.3 E2E smoke tests (headless multi-turn)
 - [ ] B.4 CI pipeline (GitHub Actions: build + test + lint)
 
-### Phase C — Differentiation
+### Phase C — Differentiation (核心差异化能力)
 
-- [ ] C.1 `/diff` and `/commit` — auto-generate commit messages
-- [ ] C.2 LSP integration — goToDefinition / findReferences
-- [ ] C.3 Vim keybindings — optional modal editing
-- [ ] C.4 Session management — list, search, import/export
-- [ ] C.5 Go-specific tooling — `go vet`, `golangci-lint` runners
+- [ ] C.1 Go 原生工具链 — `go vet` / `golangci-lint` runner，代码质量门禁嵌入对话
+- [ ] C.2 LSP 集成 — 用 gopls 做 go-to-definition / findReferences，直接嵌入
+- [ ] C.3 `/diff` and `/commit` — 分析变更自动生成 commit message
+- [ ] C.4 成本透明面板 — cache-hit 节省金额、turn-by-turn 成本、预算预警
+- [ ] C.5 极速冷启动 (<100ms) — headless pipeline 模式：`git diff | ergate -p "..."` 
+- [ ] C.6 Vim keybindings — optional modal editing
+- [ ] C.7 Session management — list, search, import/export
+
+### Phase D — 迁移与生态（扩大用户基础）
+
+- [ ] D.1 **Claude Code 兼容层** — 直接读取 `~/.claude/skills/` 目录，格式适配器
+- [ ] D.2 **一键迁移工具** — `ergate migrate --from claude-code`，导入配置/skill/memory
+- [ ] D.3 **命令/快捷键平替** — `/review`、`/doctor`、`/compact` 等与 Claude Code 保持一致
+- [ ] D.4 Skill 导入命令 — `ergate skill import <url>`，从 GitHub repo 拉取社区 skill
+- [ ] D.5 多 Workspace 管理 — 并行对话、切换上下文

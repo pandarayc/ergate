@@ -94,6 +94,30 @@ func truncateForDisplay(s string, maxLen int) string {
 	return result
 }
 
+// renderPermissionOverlay renders the permission dialog with single-key options.
+func renderPermissionOverlay(o *Overlay, width int) string {
+	style := PermissionDialogStyle.Width(width - 2)
+	toolStyle := lipgloss.NewStyle().Foreground(Warning).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(Accent).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(Muted)
+
+	var b strings.Builder
+	b.WriteString(toolStyle.Render(o.ToolName))
+	if o.Summary != "" {
+		b.WriteString(" " + dimStyle.Render(o.Summary))
+	}
+	b.WriteString("\n\n")
+	b.WriteString(keyStyle.Render("y") + dimStyle.Render("  approve once"))
+	b.WriteString("\n")
+	b.WriteString(keyStyle.Render("a") + dimStyle.Render("  always allow"))
+	b.WriteString("\n")
+	b.WriteString(keyStyle.Render("n") + dimStyle.Render("  deny"))
+	b.WriteString("\n")
+	b.WriteString(dimStyle.Render("Esc  deny"))
+
+	return style.Render(b.String())
+}
+
 // renderDetailOverlay renders the detail popup with search bar, dropdown, and content.
 func renderDetailOverlay(o *Overlay, termW, termH int) string {
 	w := termW * 80 / 100

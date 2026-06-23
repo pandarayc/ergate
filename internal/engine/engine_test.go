@@ -184,7 +184,7 @@ func TestEngineToolUseResponse(t *testing.T) {
 		_ = eng.Run(ctx, "Echo hello world", events)
 	}()
 
-	var gotToolUse, gotToolResult bool
+	var gotToolUse, gotToolChain bool
 	for event := range events {
 		switch event.Type {
 		case EventToolUse:
@@ -193,10 +193,17 @@ func TestEngineToolUseResponse(t *testing.T) {
 					gotToolUse = true
 				}
 			}
-		case EventToolResult:
+		case EventToolChain:
 			if data, ok := event.Data.(map[string]interface{}); ok {
-				if data["name"] == "echo" {
-					gotToolResult = true
+				if itemsJSON, ok := data["items"].(string); ok {
+					var items []ToolChainItem
+					if json.Unmarshal([]byte(itemsJSON), &items) == nil {
+						for _, item := range items {
+							if item.Name == "echo" {
+								gotToolChain = true
+							}
+						}
+					}
 				}
 			}
 		}
@@ -205,8 +212,8 @@ func TestEngineToolUseResponse(t *testing.T) {
 	if !gotToolUse {
 		t.Error("Expected tool use event for 'echo'")
 	}
-	if !gotToolResult {
-		t.Error("Expected tool result event for 'echo'")
+	if !gotToolChain {
+		t.Error("Expected tool chain event for 'echo'")
 	}
 }
 

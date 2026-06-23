@@ -3,6 +3,10 @@
 package message
 
 import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
 	"github.com/raydraw/ergate/internal/tui/list"
 )
 
@@ -11,13 +15,16 @@ import (
 type ChatMessage struct {
 	list.Versioned
 
-	Role    string // "user", "assistant", "tool", "thinking", "error", "system"
+	Role    string // "user", "assistant", "tool", "toolchain", "thinking", "error", "system"
 	Content string // full content (never pre-truncated; fold is render-time only)
-	Detail  string // full tool input/output (tool role only)
+	Detail  string // full tool input/output (tool role only) or tool chain JSON
 
 	Collapsed bool // true when folded due to overflow
 	wasFolded bool // true once Collapsed was ever set — keeps widget active after unfold
 	finished  bool // true when streaming has completed
+
+	// Tool chain fields.
+	ChainSummary string // one-line tool chain summary (e.g. "3 tools · Read → Edit → Bash")
 
 	// Render cache.
 	cacheWidth   int
@@ -39,6 +46,54 @@ func NewTool(content, detail string) *ChatMessage {
 		Role:    "tool",
 		Content: content,
 		Detail:  detail,
+	}
+}
+
+// NewToolChain creates a tool chain message from an engine EventToolChain Data map.
+// The Data has map[string]any{"items": "<json>"} where <json> is a JSON-encoded
+// []ToolChainItem array (JSON-serialised at the engine boundary to avoid cross-package
+// type assertion issues).
+func NewToolChain(data map[string]any) *ChatMessage {
+	rawItems, ok := data["items"]
+	if !ok {
+		return nil
+	}
+	itemsJSON, ok := rawItems.(string)
+	if !ok || itemsJSON == "" {
+		return nil
+	}
+
+	var items []struct {
+		Name    string `json:"name"`
+		Input   string `json:"input"`
+		Content string `json:"content"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.Unmarshal([]byte(itemsJSON), &items); err != nil || len(items) == 0 {
+		return nil
+	}
+
+	// Build chain summary line.
+	var names []string
+	errCount := 0
+	for _, item := range items {
+		names = append(names, item.Name)
+		if item.IsError {
+			errCount++
+		}
+	}
+
+	status := "all passed"
+	if errCount > 0 {
+		status = fmt.Sprintf("%d errors", errCount)
+	}
+	summary := fmt.Sprintf("%d tools · %s · %s", len(names), strings.Join(names, " → "), status)
+
+	return &ChatMessage{
+		Role:         "toolchain",
+		Content:      "⚙ " + summary,
+		Detail:       itemsJSON,
+		ChainSummary: summary,
 	}
 }
 
@@ -94,6 +149,8 @@ func (m *ChatMessage) renderContent(width int) string {
 		return renderAssistant(m, width)
 	case "tool":
 		return renderTool(m, width)
+	case "toolchain":
+		return renderToolChain(m, width)
 	case "thinking":
 		return renderThinking(m, width)
 	case "error":

@@ -126,6 +126,215 @@ func renderEditDiff(filePath, oldStr, newStr string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// renderToolChain renders a tool chain message with head/tail summary.
+// The Detail field contains JSON-encoded []ToolChainItem.
+func renderToolChain(m *ChatMessage, width int) string {
+	if m.Detail == "" {
+		return m.Content
+	}
+	contentW := max(width-4, 20)
+	bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
+
+	var items []struct {
+		Name    string `json:"name"`
+		Input   string `json:"input"`
+		Content string `json:"content"`
+		IsError bool   `json:"is_error"`
+	}
+	if err := json.Unmarshal([]byte(m.Detail), &items); err != nil || len(items) == 0 {
+		return bar + " " + ToolStyle.Render(m.Content)
+	}
+
+	var b strings.Builder
+
+	// Header: chain summary line.
+	passedCount := 0
+	errorCount := 0
+	for _, it := range items {
+		if it.IsError {
+			errorCount++
+		} else {
+			passedCount++
+		}
+	}
+	statusIcon := "✓"
+	if errorCount > 0 {
+		statusIcon = "✗"
+	}
+	b.WriteString(bar + " " + ToolStyle.Render(m.ChainSummary) + " " + statusIcon)
+	b.WriteString("\n")
+
+	// Each tool: name + head/tail summary.
+	for _, it := range items {
+		b.WriteString(bar + "  " + renderToolChainItem(it, contentW-2))
+	}
+
+	// Footer: hint.
+	b.WriteString(FoldStyle.Render("═══ Ctrl+O 展开 · 点击展开 ═══"))
+
+	return b.String()
+}
+
+// renderToolChainItem renders a single tool within a chain as head/tail summary.
+func renderToolChainItem(item struct {
+	Name    string "json:\"name\""
+	Input   string "json:\"input\""
+	Content string "json:\"content\""
+	IsError bool   "json:\"is_error\""
+}, width int) string {
+	// Extract file path from input if present.
+	var filePath string
+	var rawInput map[string]interface{}
+	if json.Unmarshal([]byte(item.Input), &rawInput) == nil {
+		if fp, ok := rawInput["file_path"].(string); ok {
+			filePath = fp
+		}
+	}
+
+	lines := strings.Split(item.Content, "\n")
+	totalLines := len(lines)
+
+	var b strings.Builder
+
+	switch {
+	case item.IsError:
+		// Error: show first 3 lines.
+		errStyle := lipgloss.NewStyle().Foreground(Error)
+		b.WriteString(errStyle.Render(item.Name + " ✗"))
+		if filePath != "" {
+			b.WriteString(" " + lipgloss.NewStyle().Foreground(Muted).Render(filePath))
+		}
+		b.WriteString("\n")
+		maxLines := min(totalLines, 3)
+		for i := 0; i < maxLines; i++ {
+			b.WriteString("    " + errStyle.Render(truncateLine(lines[i], width-4)))
+			b.WriteString("\n")
+		}
+		if totalLines > maxLines {
+			b.WriteString(FoldStyle.Render(fmt.Sprintf("    ... %d more lines\n", totalLines-maxLines)))
+		}
+
+	case item.Name == "Edit":
+		// Edit: show diff summary (head + tail).
+		b.WriteString(ToolResultStyle.Render(item.Name))
+		if filePath != "" {
+			b.WriteString(" " + lipgloss.NewStyle().Foreground(Info).Render(filePath))
+		}
+		// Count +/- lines.
+		addCount, delCount := 0, 0
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimLeft(line, " \t"), "+") {
+				addCount++
+			}
+			if strings.HasPrefix(strings.TrimLeft(line, " \t"), "-") {
+				delCount++
+			}
+		}
+		b.WriteString(lipgloss.NewStyle().Foreground(Success).Render(fmt.Sprintf(" (+%d", addCount)))
+		b.WriteString(lipgloss.NewStyle().Foreground(Error).Render(fmt.Sprintf(" -%d)", delCount)))
+		b.WriteString("\n")
+		// Head 3 + tail 3.
+		if totalLines <= 7 {
+			for _, line := range lines {
+				b.WriteString("    " + renderDiffLine(line))
+				b.WriteString("\n")
+			}
+		} else {
+			for i := 0; i < 3; i++ {
+				b.WriteString("    " + renderDiffLine(lines[i]))
+				b.WriteString("\n")
+			}
+			b.WriteString(FoldStyle.Render(fmt.Sprintf("    ... %d lines\n", totalLines-6)))
+			for i := totalLines - 3; i < totalLines; i++ {
+				if i >= 3 {
+					b.WriteString("    " + renderDiffLine(lines[i]))
+					b.WriteString("\n")
+				}
+			}
+		}
+
+	case item.Name == "Bash":
+		// Bash: show head + tail, with errors highlighted.
+		status := "✓"
+		statusStyle := lipgloss.NewStyle().Foreground(Success)
+		b.WriteString(ToolResultStyle.Render(item.Name + " ") + statusStyle.Render(status))
+		b.WriteString("\n")
+		if totalLines <= 7 {
+			for _, line := range lines {
+				b.WriteString("    " + truncateLine(line, width-4))
+				b.WriteString("\n")
+			}
+		} else {
+			for i := 0; i < 3; i++ {
+				b.WriteString("    " + truncateLine(lines[i], width-4))
+				b.WriteString("\n")
+			}
+			b.WriteString(FoldStyle.Render(fmt.Sprintf("    ... %d lines\n", totalLines-6)))
+			for i := totalLines - 3; i < totalLines; i++ {
+				if i >= 3 {
+					b.WriteString("    " + truncateLine(lines[i], width-4))
+					b.WriteString("\n")
+				}
+			}
+		}
+
+	default:
+		// Read, Grep, Glob, etc.: show head + tail + file name + line count.
+		b.WriteString(ToolResultStyle.Render(item.Name + ":"))
+		if filePath != "" {
+			b.WriteString(" " + lipgloss.NewStyle().Foreground(Info).Render(filePath))
+		}
+		b.WriteString(FoldStyle.Render(fmt.Sprintf("  %d lines", totalLines)))
+		b.WriteString("\n")
+		if totalLines <= 7 {
+			for _, line := range lines {
+				b.WriteString("    " + truncateLine(line, width-4))
+				b.WriteString("\n")
+			}
+		} else {
+			for i := 0; i < 4; i++ {
+				b.WriteString("    " + truncateLine(lines[i], width-4))
+				b.WriteString("\n")
+			}
+			b.WriteString(FoldStyle.Render(fmt.Sprintf("    ...\n")))
+			for i := totalLines - 3; i < totalLines; i++ {
+				if i >= 4 {
+					b.WriteString("    " + truncateLine(lines[i], width-4))
+					b.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// renderDiffLine renders a single line with diff coloring based on prefix.
+func renderDiffLine(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	switch {
+	case strings.HasPrefix(trimmed, "+"):
+		return DiffAdded.Render(line)
+	case strings.HasPrefix(trimmed, "-"):
+		return DiffRemoved.Render(line)
+	case strings.HasPrefix(trimmed, "@@"):
+		return DiffHunk.Render(line)
+	default:
+		return ToolResultStyle.Render(line)
+	}
+}
+
+// truncateLine truncates a single line to maxLen characters.
+func truncateLine(line string, maxLen int) string {
+	if maxLen < 4 {
+		maxLen = 4
+	}
+	if len(line) <= maxLen {
+		return line
+	}
+	return line[:maxLen-3] + "..."
+}
+
 func truncateStr(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s

@@ -7,6 +7,7 @@ type OverlayKind int
 const (
 	OverlayPermission OverlayKind = iota
 	OverlayDetail
+	OverlayToolChain
 )
 
 // DetailMatch is a search result within detail content.
@@ -50,6 +51,7 @@ type Overlay struct {
 	ToolName string
 	Summary  string
 	Selected int
+	PermResult int // 0=pending, 1=approved, -1=denied, 2=always allow
 
 	// Detail view (OverlayDetail).
 	DetailTitle      string        // dialog title (e.g. tool name)

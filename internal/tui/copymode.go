@@ -14,6 +14,11 @@ import "strings"
 //
 // Coordinates are in the pre-wrapped visual content space: each wrappedLines entry
 // is one viewport row, so YOffset maps 1:1 to wrappedLines indices.
+//
+// A minimum drag distance (minDragDist) prevents spurious motion events
+// (common on WSL/Windows Terminal) from consuming clicks as selections.
+const minDragDist = 4
+
 type CopyMode struct {
 	active  bool
 	settled bool
@@ -24,6 +29,14 @@ type CopyMode struct {
 
 	wrappedLines []string // pre-wrapped content: 1 entry = 1 visual row
 	contentLines int      // line count at last SetContent; used to detect streaming changes
+
+	// Highlight cache: avoids per-frame ANSI scanning for unchanged selection+content.
+	hlCache struct {
+		content string // last highlighted content input
+		sx, sy  int    // last selection bounds
+		ex, ey  int
+		result  string // cached highlighted output
+	}
 }
 
 // Enter starts copy mode at the given mouse position.
@@ -35,6 +48,7 @@ func (cm *CopyMode) Enter(mouseX, mouseY, yOffset int) {
 	cm.anchorY = mouseY + yOffset
 	cm.focusX = -1
 	cm.focusY = -1
+	cm.hlCache.content = "" // invalidate highlight cache
 }
 
 // Track updates the selection end point during drag.
@@ -44,6 +58,7 @@ func (cm *CopyMode) Track(mouseX, mouseY, yOffset int) {
 	}
 	cm.focusX = mouseX
 	cm.focusY = mouseY + yOffset
+	cm.hlCache.content = "" // selection changed, invalidate cache
 }
 
 // Finish ends the drag, copies text, and transitions to settled state.
@@ -75,9 +90,25 @@ func (cm *CopyMode) Cancel() {
 // IsActive returns true if copy mode is active (dragging or settled).
 func (cm *CopyMode) IsActive() bool { return cm.active || cm.settled }
 
-// HasSelection returns true when there is a non-degenerate selection to display.
+// HasSelection returns true when there is a meaningful selection to display.
+// Requires a minimum drag distance to avoid consuming clicks as spurious 1-pixel selections.
 func (cm *CopyMode) HasSelection() bool {
-	return (cm.active || cm.settled) && cm.focusX >= 0
+	if cm.focusX < 0 {
+		return false
+	}
+	if !cm.active && !cm.settled {
+		return false
+	}
+	// Check minimum drag distance to filter out spurious terminal motion events.
+	dx := cm.focusX - cm.anchorX
+	dy := cm.focusY - cm.anchorY
+	if dx < 0 {
+		dx = -dx
+	}
+	if dy < 0 {
+		dy = -dy
+	}
+	return dx >= minDragDist || dy >= minDragDist
 }
 
 // selectedRange returns normalized selection bounds in reading order.
@@ -105,12 +136,21 @@ func (cm *CopyMode) SetContent(content string) {
 }
 
 // Highlight applies selection background to the pre-wrapped content.
+// Results are cached — only recomputed when content or selection changes.
 func (cm *CopyMode) Highlight(content string) string {
 	if !cm.HasSelection() {
 		return content
 	}
 
 	sx, sy, ex, ey := cm.selectedRange()
+
+	// Return cached result if content and selection haven't changed.
+	if cm.hlCache.content == content &&
+		cm.hlCache.sx == sx && cm.hlCache.sy == sy &&
+		cm.hlCache.ex == ex && cm.hlCache.ey == ey {
+		return cm.hlCache.result
+	}
+
 	lines := strings.Split(content, "\n")
 
 	if sy < 0 {
@@ -142,7 +182,17 @@ func (cm *CopyMode) Highlight(content string) string {
 			b.WriteString(injectBgRange(line, selBg, 0, -1))
 		}
 	}
-	return b.String()
+	result := b.String()
+	
+	// Cache the result.
+	cm.hlCache.content = content
+	cm.hlCache.sx = sx
+	cm.hlCache.sy = sy
+	cm.hlCache.ex = ex
+	cm.hlCache.ey = ey
+	cm.hlCache.result = result
+	
+	return result
 }
 
 // extractText extracts plain text from the selected region.
