@@ -79,6 +79,11 @@ var (
 			Foreground(Muted).
 			Italic(true)
 
+	// ChatDimStyle dims background chat content behind modal overlays.
+	ChatDimStyle = lipgloss.NewStyle().
+			Foreground(Subtle)
+
+
 	// AssistantBorderStyle is the left border for assistant message blocks.
 	AssistantBorderStyle = lipgloss.NewStyle().
 				Foreground(Accent).

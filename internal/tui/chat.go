@@ -319,11 +319,8 @@ func (m *ChatModel) View() string {
 		case OverlayPermission:
 			permView := renderPermissionOverlay(o, m.width)
 			return lipgloss.JoinVertical(lipgloss.Left, wrapped, permView)
-		case OverlayDetail, OverlayToolChain:
-			availableH := m.height / 2
-			detailView := renderDetailOverlay(o, m.width, availableH)
-			centered := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, detailView)
-			return centered
+			case OverlayDetail, OverlayToolChain:
+				return m.renderModalOverlay(o, wrapped, bottom.String())
 		}
 	}
 
@@ -358,6 +355,63 @@ func (m *ChatModel) viewportHeight() int {
 	tbH := m.toolsBar.Height()
 	oh := m.overlayReservedHeight()
 	return max(m.height-header-spacer-tbH-input-stat-oh, 3)
+}
+
+// renderModalOverlay renders a centered detail/toolchain popup with dimmed
+// chat content as background. TUI lacks z-layering, so we truncate the
+// chat to the top portion, show the popup centered, and dim background lines.
+func (m *ChatModel) renderModalOverlay(o *Overlay, wrapped, statusBar string) string {
+	detailView := renderDetailOverlay(o, m.width, m.height/2)
+	detailLines := strings.Split(detailView, "\n")
+	detailH := len(detailLines)
+
+	statusLines := strings.Split(statusBar, "\n")
+	statusH := len(statusLines)
+
+	totalH := m.height
+	// If popup is taller than viewport, just show it alone.
+	if detailH >= totalH-1 {
+		return detailView
+	}
+
+	// Available space above and below popup.
+	gap := totalH - detailH - statusH
+	aboveH := gap / 2
+	belowH := gap - aboveH
+
+	dimStyle := ChatDimStyle
+
+	// Build top section: last `aboveH` lines of chat, dimmed.
+	chatLines := strings.Split(wrapped, "\n")
+	var topLines []string
+	if len(chatLines) > aboveH {
+		topLines = chatLines[len(chatLines)-aboveH:]
+	} else {
+		pad := aboveH - len(chatLines)
+		for range pad {
+			topLines = append(topLines, "")
+		}
+		topLines = append(topLines, chatLines...)
+	}
+	// Dim the background chat lines.
+	for i, l := range topLines {
+		topLines[i] = dimStyle.Render(l)
+	}
+
+	// Build bottom section: blank padding + status bar.
+	var bottomLines []string
+	for range belowH {
+		bottomLines = append(bottomLines, "")
+	}
+	bottomLines = append(bottomLines, statusLines...)
+
+	// Assemble: top (dimmed chat) + popup + bottom (padding + status).
+	var all []string
+	all = append(all, topLines...)
+	all = append(all, detailLines...)
+	all = append(all, bottomLines...)
+
+	return strings.Join(all, "\n")
 }
 
 // overlayReservedHeight returns the number of rows reserved for an inline overlay.
