@@ -48,6 +48,9 @@ type ChatModel struct {
 	// Overlay support — reuses existing OverlayManager from overlay.go.
 	overlays OverlayManager
 
+	// Popup detail overlay (tool output, thinking).
+	detailModel *DetailModel
+
 	// Spinner.
 	spinnerIdx int
 
@@ -96,6 +99,9 @@ func (m *ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Overlay active — only overlay gets events (blocking).
+	if m.detailModel != nil {
+		return m.handleDetailMsg(msg)
+	}
 	if m.overlays.IsActive() {
 		return m.handleOverlayEvent(msg)
 	}
@@ -188,6 +194,25 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	return m, nil
+}
+
+
+// handleDetailMsg routes keyboard/mouse events to the detail popup model.
+// Non-input messages (WindowSize, etc.) pass through.
+func (m *ChatModel) handleDetailMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg:
+		// Route to detailModel only; block propagation.
+		newModel, cmd := m.detailModel.Update(msg)
+		m.detailModel = newModel.(*DetailModel)
+		return m, cmd
+	case DetailCloseMsg:
+		m.detailModel = nil
+		m.viewDirty = true
+		return m, nil
+	}
+	// Non-input messages (WindowSize, etc.) pass through to chat.
 	return m, nil
 }
 
@@ -380,12 +405,22 @@ func (m *ChatModel) View() string {
 		case OverlayPermission:
 			permView := renderPermissionOverlay(o, m.width)
 			return lipgloss.JoinVertical(lipgloss.Left, wrapped, permView)
-			case OverlayDetail, OverlayToolChain:
-				return m.renderModalOverlay(o, wrapped, bottom.String())
+
 		}
 	}
 
-	return result
+	// Detail popup (centered overlay via PlaceOverlay).
+	if m.detailModel != nil {
+		overlay := m.detailModel.View()
+		return lipgloss.Place(m.width, m.height,
+			lipgloss.Center, lipgloss.Center,
+			overlay,
+			lipgloss.WithWhitespaceChars("░"),
+			lipgloss.WithWhitespaceForeground(Subtle),
+		)
+	}
+
+		return result
 }
 
 // welcomeView renders the initial welcome screen.
@@ -640,13 +675,7 @@ func (m *ChatModel) handleItemClick(x, y int) tea.Cmd {
 		case "toolchain":
 			return m.openToolChainOverlayFor(msg)
 		case "thinking":
-			// Thinking: open full content in pop layer instead of inline expand.
-			o := &Overlay{
-				Kind:          OverlayToolChain,
-				DetailTitle:   "[thinking]",
-				DetailContent: msg.Content,
-			}
-			m.overlays.Show(o)
+			m.detailModel = NewDetailModel("[thinking]", msg.Content, m.width, m.height)
 			m.viewDirty = true
 			return nil
 		}
@@ -934,16 +963,15 @@ func (m *ChatModel) openToolChainOverlay() tea.Cmd {
 
 // openToolChainOverlayFor opens the pop layer for a specific tool chain message.
 func (m *ChatModel) openToolChainOverlayFor(msg *message.ChatMessage) tea.Cmd {
+	title := msg.ChainSummary
+	if title == "" {
+		title = "Tool Chain"
+	}
 	detailContent := formatToolChainDetail(msg.Detail)
 	if detailContent == "" {
 		detailContent = msg.Content
 	}
-	o := &Overlay{
-		Kind:          OverlayToolChain,
-		DetailTitle:   msg.ChainSummary,
-		DetailContent: detailContent,
-	}
-	m.overlays.Show(o)
+	m.detailModel = NewDetailModel(title, detailContent, m.width, m.height)
 	m.viewDirty = true
 	return nil
 }
