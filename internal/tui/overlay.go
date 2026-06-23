@@ -53,7 +53,7 @@ type Overlay struct {
 	Selected int
 	PermResult int // 0=pending, 1=approved, -1=denied, 2=always allow
 
-	// Detail view (OverlayDetail).
+	// Detail view (OverlayDetail, OverlayToolChain).
 	DetailTitle      string        // dialog title (e.g. tool name)
 	DetailContent    string        // full content to display
 	DetailScroll     int           // content scroll line offset
@@ -62,4 +62,12 @@ type Overlay struct {
 	DetailMatches    []DetailMatch // fuzzy match results
 	DetailMatchIdx   int           // selected match in dropdown (0 = first)
 	DetailMatchOff   int           // dropdown scroll offset
+
+	// Copy mode within the detail content area.
+	CopyActive  bool // true when selecting text
+	CopyAnchorY int  // detail-content-relative Y of selection start
+	CopyFocusY  int  // detail-content-relative Y of selection end
+	// ContentStartY is set by the renderer to the screen Y where the
+	// detail body content begins (after title, search bar, divider).
+	ContentStartY int
 }

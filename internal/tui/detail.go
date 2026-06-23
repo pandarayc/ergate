@@ -156,6 +156,12 @@ func renderDetailOverlay(o *Overlay, termW, termH int) string {
 	// Hints
 	hints := renderDetailHints(o, innerW)
 
+	// Compute where body content starts within the detail view (for copy mode).
+	bodyLineY := 2 + strings.Count(title, "\n") + 1 +
+		strings.Count(searchBlock, "\n") + 1 +
+		strings.Count(divider, "\n") + 1
+	o.ContentStartY = bodyLineY
+
 	// Assemble
 	inner := lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -264,6 +270,13 @@ func renderDetailBody(o *Overlay, w, maxLines int) string {
 		searchQ = strings.ToLower(o.DetailSearchQ)
 	}
 
+	// Determine copy-mode selection range.
+	cpStart, cpEnd := o.CopyAnchorY, o.CopyFocusY
+	if cpStart > cpEnd {
+		cpStart, cpEnd = cpEnd, cpStart
+	}
+	selStyle := lipgloss.NewStyle().Background(Accent).Foreground(TextColor)
+
 	var visible []string
 	for i := o.DetailScroll; i < end; i++ {
 		line := lines[i]
@@ -275,6 +288,10 @@ func renderDetailBody(o *Overlay, w, maxLines int) string {
 			if o.DetailMatches[o.DetailMatchIdx].Line == i {
 				line = highlightMatch(line, searchQ)
 			}
+		}
+		// Highlight copy-mode selection.
+		if o.CopyActive && i >= cpStart && i <= cpEnd {
+			line = selStyle.Render(line)
 		}
 		visible = append(visible, line)
 	}

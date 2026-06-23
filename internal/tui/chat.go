@@ -182,10 +182,71 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseMsg:
-		return m, nil // mouse blocked during overlay
+		switch o.Kind {
+		case OverlayDetail, OverlayToolChain:
+			m.handleOverlayMouse(o, msg)
+		}
+		return m, nil
 	}
 	return m, nil
 }
+
+// handleOverlayMouse handles mouse events for copy mode within detail/toolchain overlays.
+func (m *ChatModel) handleOverlayMouse(o *Overlay, msg tea.MouseMsg) {
+	contentLines := strings.Split(o.DetailContent, "\n")
+	if len(contentLines) == 0 {
+		return
+	}
+
+	// Map screen Y to content-line index accounting for ContentStartY + DetailScroll.
+	detailY := msg.Y - o.ContentStartY
+	if detailY < 0 {
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			o.CopyActive = false
+		}
+		return
+	}
+	contentIdx := detailY + o.DetailScroll
+	if contentIdx >= len(contentLines) {
+		return
+	}
+
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if o.DetailScroll > 0 {
+			o.DetailScroll--
+		}
+	case tea.MouseButtonWheelDown:
+		o.DetailScroll++
+	case tea.MouseButtonLeft:
+		switch msg.Action {
+		case tea.MouseActionPress:
+			o.CopyActive = true
+			o.CopyAnchorY = contentIdx
+			o.CopyFocusY = contentIdx
+		case tea.MouseActionMotion:
+			if o.CopyActive {
+				o.CopyFocusY = contentIdx
+			}
+		case tea.MouseActionRelease:
+			if o.CopyActive {
+				o.CopyActive = false
+				start := o.CopyAnchorY
+				end := o.CopyFocusY
+				if start > end {
+					start, end = end, start
+				}
+				if end < len(contentLines) {
+					text := strings.Join(contentLines[start:end+1], "\n")
+					if text != "" {
+						copyToClipboard(text)
+					}
+				}
+			}
+		}
+	}
+}
+
 
 // LoadSession loads a session by ID, clearing the current chat state
 // and importing the session into the engine.
@@ -371,12 +432,16 @@ func (m *ChatModel) renderModalOverlay(o *Overlay, wrapped, statusBar string) st
 	totalH := m.height
 	// If popup is taller than viewport, just show it alone.
 	if detailH >= totalH-1 {
+		o.ContentStartY = 0 // no offset needed, entire screen is popup
 		return detailView
 	}
 
 	// Available space above and below popup.
 	gap := totalH - detailH - statusH
 	aboveH := gap / 2
+
+	// Add popup's screen Y offset to body position for copy mode.
+	o.ContentStartY += aboveH
 	belowH := gap - aboveH
 
 	dimStyle := ChatDimStyle
