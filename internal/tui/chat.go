@@ -155,7 +155,7 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc {
 				m.overlays.Hide()
 			}
-		case OverlayDetail:
+		case OverlayDetail, OverlayToolChain:
 			if msg.Type == tea.KeyEsc || (len(msg.Runes) == 1 && msg.Runes[0] == 'q') {
 				m.overlays.Hide()
 			}
@@ -322,7 +322,8 @@ func (m *ChatModel) View() string {
 		case OverlayDetail, OverlayToolChain:
 			availableH := m.height / 2
 			detailView := renderDetailOverlay(o, m.width, availableH)
-			return lipgloss.JoinVertical(lipgloss.Left, wrapped, detailView, bottom.String())
+			centered := lipgloss.Place(m.width, m.height-1, lipgloss.Center, lipgloss.Center, detailView)
+			return centered
 		}
 	}
 
@@ -515,8 +516,21 @@ func (m *ChatModel) handleItemClick(x, y int) tea.Cmd {
 	if item == nil {
 		return nil
 	}
-	if msg, ok := item.(*message.ChatMessage); ok && msg.Role == "toolchain" {
-		return m.openToolChainOverlayFor(msg)
+	if msg, ok := item.(*message.ChatMessage); ok {
+		switch msg.Role {
+		case "toolchain":
+			return m.openToolChainOverlayFor(msg)
+		case "thinking":
+			// Thinking: open full content in pop layer instead of inline expand.
+			o := &Overlay{
+				Kind:          OverlayToolChain,
+				DetailTitle:   "[thinking]",
+				DetailContent: msg.Content,
+			}
+			m.overlays.Show(o)
+			m.viewDirty = true
+			return nil
+		}
 	}
 	if handler, ok := item.(list.MouseHandler); ok {
 		if handler.HandleMouseClick(list.MouseButtonLeft, x, itemY) {

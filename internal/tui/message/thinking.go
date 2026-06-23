@@ -2,6 +2,7 @@ package message
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 )
@@ -10,7 +11,8 @@ import (
 var MaxThinkingLines = DefaultMaxThinkingLines
 
 // renderThinking renders a thinking/reasoning message.
-// Returns empty string if thinking is suppressed (caller should filter before adding to list).
+// When folded: shows first line preview + "— click to expand in pop layer".
+// When expanded: shows full content with fold toggle.
 func renderThinking(m *ChatMessage, width int) string {
 	contentW := max(width-4, 20)
 	bar := lipgloss.NewStyle().Foreground(Accent).Bold(true).Render("│")
@@ -24,9 +26,14 @@ func renderThinking(m *ChatMessage, width int) string {
 
 	if overflow {
 		if m.Collapsed {
-			hint := ThinkingStyle.Render("[thinking]") + " " + FoldStyle.Render(
-				fmt.Sprintf("─── %d lines ─ click to expand", total),
-			)
+			// Show first line as preview, not just line count.
+			firstLine := strings.SplitN(m.Content, "\n", 2)[0]
+			if len(firstLine) > 80 {
+				firstLine = firstLine[:77] + "..."
+			}
+			hint := ThinkingStyle.Render("[thinking]") + " " +
+				lipgloss.NewStyle().Foreground(Muted).Render(firstLine) + "  " +
+				FoldStyle.Render(fmt.Sprintf("── %d lines · click to expand", total))
 			return bar + " " + hint
 		}
 		fold := foldView(false, "")

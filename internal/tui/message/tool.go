@@ -77,9 +77,20 @@ type editInput struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
-// renderToolDetail renders tool detail with diff-style coloring.
+// renderToolDetail renders tool detail with useful info extracted from JSON input.
 func renderToolDetail(toolLine, detail string) string {
-	if strings.Contains(toolLine, "Edit") || strings.Contains(toolLine, "edit") {
+	// Parse JSON to extract meaningful fields.
+	var raw map[string]any
+	if json.Unmarshal([]byte(detail), &raw) != nil {
+		return truncateStr(detail, 200)
+	}
+
+	switch {
+	case strings.Contains(toolLine, "Bash") || strings.Contains(toolLine, "bash"):
+		if cmd, ok := raw["command"].(string); ok {
+			return ToolResultStyle.Render("$ " + truncateStr(cmd, 200))
+		}
+	case strings.Contains(toolLine, "Edit") || strings.Contains(toolLine, "edit"):
 		var in editInput
 		if err := json.Unmarshal([]byte(detail), &in); err == nil && in.OldString != "" {
 			return renderEditDiff(in.FilePath, in.OldString, in.NewString)
@@ -100,8 +111,15 @@ func renderToolDetail(toolLine, detail string) string {
 			out.WriteString("\n")
 		}
 		return strings.TrimRight(out.String(), "\n")
+	default:
+		if fp, ok := raw["file_path"].(string); ok && fp != "" {
+			return lipgloss.NewStyle().Foreground(Info).Render(fp)
+		}
 	}
-	return truncateStr(detail, 100)
+
+	// Re-encode cleanly to eliminate Unicode escapes.
+	clean, _ := json.MarshalIndent(raw, "", "  ")
+	return ToolResultStyle.Render(string(clean))
 }
 
 // renderEditDiff generates a colourised visual diff from old_string/new_string.
@@ -182,12 +200,15 @@ func renderToolChainItem(item struct {
 	Content string "json:\"content\""
 	IsError bool   "json:\"is_error\""
 }, width int) string {
-	// Extract file path from input if present.
-	var filePath string
+	// Extract meaningful fields from input.
+	var filePath, command string
 	var rawInput map[string]interface{}
 	if json.Unmarshal([]byte(item.Input), &rawInput) == nil {
 		if fp, ok := rawInput["file_path"].(string); ok {
 			filePath = fp
+		}
+		if cmd, ok := rawInput["command"].(string); ok {
+			command = cmd
 		}
 	}
 
@@ -254,10 +275,13 @@ func renderToolChainItem(item struct {
 		}
 
 	case item.Name == "Bash":
-		// Bash: show head + tail, with errors highlighted.
+		// Bash: show command + head/tail output.
 		status := "✓"
 		statusStyle := lipgloss.NewStyle().Foreground(Success)
 		b.WriteString(ToolResultStyle.Render(item.Name + " ") + statusStyle.Render(status))
+		if command != "" {
+			b.WriteString("  " + lipgloss.NewStyle().Foreground(Muted).Render("$ "+truncateStr(command, width-10)))
+		}
 		b.WriteString("\n")
 		if totalLines <= 7 {
 			for _, line := range lines {

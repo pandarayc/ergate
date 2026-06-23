@@ -164,9 +164,13 @@ func (m *ChatMessage) renderContent(width int) string {
 
 // HandleMouseClick implements list.MouseHandler for foldable messages.
 // x is the column, y is the line offset within the rendered output.
+// Thinking messages use pop layer expansion instead (see chat.go handleItemClick).
 func (m *ChatMessage) HandleMouseClick(btn list.MouseButton, x, y int) bool {
 	if !m.wasFolded || btn != list.MouseButtonLeft {
 		return false
+	}
+	if m.Role == "thinking" {
+		return false // handled by pop layer in chat.go
 	}
 	m.ToggleExpand()
 	return true

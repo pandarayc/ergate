@@ -691,9 +691,15 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 
 // makeToolChainItem creates a ToolChainItem from a tool execution result.
 func (e *Engine) makeToolChainItem(tu llm.ToolUseBlock, result *tool.ToolResult, err error) ToolChainItem {
+	// Re-marshal input to eliminate Unicode escapes (e.g. & → &) that the
+	// LLM may produce. json.RawMessage preserves the original encoding.
+	input := string(tu.Input)
+	if decoded, err := decodeToolInput(tu.Input); err == nil {
+		input = decoded
+	}
 	item := ToolChainItem{
 		Name:  tu.Name,
-		Input: string(tu.Input),
+		Input: input,
 	}
 	if err != nil {
 		item.Content = fmt.Sprintf("Error: %v", err)
@@ -703,6 +709,20 @@ func (e *Engine) makeToolChainItem(tu llm.ToolUseBlock, result *tool.ToolResult,
 		item.IsError = !result.Success
 	}
 	return item
+}
+
+// decodeToolInput re-encodes json.RawMessage to eliminate Unicode escape sequences
+// that LLMs sometimes produce (e.g. & → &).
+func decodeToolInput(raw json.RawMessage) (string, error) {
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return "", err
+	}
+	clean, err := json.MarshalIndent(decoded, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(clean), nil
 }
 
 // maybeInjectConstraint periodically injects a constraint reminder to
