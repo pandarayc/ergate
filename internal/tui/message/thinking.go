@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // MaxThinkingLines is the fold threshold for thinking output.
@@ -26,15 +27,20 @@ func renderThinking(m *ChatMessage, width int) string {
 
 	if overflow {
 		if m.Collapsed {
-			// Show first line as preview, not just line count.
+			// Show first line preview + fold hint on a second line,
+			// matching opencode's multi-line collapsed format.
+			// Truncate firstLine to fit within contentW so it never
+			// wraps — otherwise the list cache height (2 lines) drifts
+			// from the actual rendered line count and click Y mapping breaks.
 			firstLine := strings.SplitN(m.Content, "\n", 2)[0]
-			if len(firstLine) > 80 {
-				firstLine = firstLine[:77] + "..."
+			prefix := bar + " " + ThinkingStyle.Render("[thinking]") + " "
+			avail := contentW - lipgloss.Width(prefix)
+			if lipgloss.Width(firstLine) > avail {
+				firstLine = ansi.Truncate(firstLine, avail-3, "...")
 			}
-			hint := ThinkingStyle.Render("[thinking]") + " " +
-				lipgloss.NewStyle().Foreground(Muted).Render(firstLine) + "  " +
-				FoldStyle.Render(fmt.Sprintf("── %d lines · click to expand", total))
-			return bar + " " + hint
+			preview := prefix + lipgloss.NewStyle().Foreground(Muted).Render(firstLine)
+			foldHint := FoldStyle.Render(fmt.Sprintf("│── %d lines · click to expand", total))
+			return preview + "\n" + foldHint
 		}
 		fold := foldView(false, "")
 		return bar + " " + ThinkingStyle.Render("[thinking] "+m.Content) + "\n" + fold

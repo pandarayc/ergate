@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // DetailCloseMsg is emitted when the user dismisses the detail popup.
@@ -29,14 +30,20 @@ type DetailModel struct {
 	searchIdx   int
 	searchOff   int
 
-	// Copy mode state.
-	copyActive  bool
-	copyAnchorY int
-	copyFocusY  int
+	// Copy mode state — character-precise, matching outer CopyMode.
+	copyActive   bool
+	copyAnchorX  int // visual column within content line (0 = left edge of text area)
+	copyAnchorY  int // content line index
+	copyFocusX   int
+	copyFocusY   int
 
 	// Dimensions set by parent via WindowSizeMsg.
 	width  int
 	height int
+
+	// bodyStartY is set during View() — the Y offset (within popup) where
+	// the scrollable body content begins. Used for mouse coordinate mapping.
+	bodyStartY int
 }
 
 type searchMatch struct {
@@ -45,8 +52,8 @@ type searchMatch struct {
 }
 
 const (
-	dlgMaxWidth  = 90
-	dlgMinWidth  = 40
+	dlgMaxWidth  = 110
+	dlgMinWidth  = 50
 	dlgMaxHeight = 30
 	dlgMinHeight = 10
 	dlgDropdownN = 5
@@ -60,6 +67,24 @@ func NewDetailModel(title, content string, w, h int) *DetailModel {
 		width:   w,
 		height:  h,
 	}
+}
+
+// Bounds returns the actual visual position and size of the popup in terminal
+// coordinates. Measures the rendered View() output so border, padding, and
+// dynamic content height are all accounted for.
+func (m *DetailModel) Bounds(termW, termH int) (x, y, w, h int) {
+	view := m.View()
+	w = lipgloss.Width(view)
+	h = strings.Count(view, "\n") + 1
+	x = (termW - w) / 2
+	if x < 0 {
+		x = 0
+	}
+	y = (termH - h) / 2
+	if y < 0 {
+		y = 0
+	}
+	return
 }
 
 // Init implements tea.Model.
@@ -83,14 +108,14 @@ func (m *DetailModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View renders the detail popup as a centered, bordered box.
 func (m *DetailModel) View() string {
-	w := m.width * 80 / 100
+	w := m.width * 90 / 100
 	if w > dlgMaxWidth {
 		w = dlgMaxWidth
 	}
 	if w < dlgMinWidth {
 		w = dlgMinWidth
 	}
-	h := m.height * 80 / 100
+	h := m.height * 90 / 100
 	if h > dlgMaxHeight {
 		h = dlgMaxHeight
 	}
@@ -110,6 +135,12 @@ func (m *DetailModel) View() string {
 	if contentH < 3 {
 		contentH = 3
 	}
+	// Track where body starts for mouse coordinate mapping.
+	// Layout: top_border(1) + title + search + divider(1) = start of body.
+	titleLines := strings.Count(title, "\n") + 1
+	searchLines := strings.Count(searchBlock, "\n") + 1
+	m.bodyStartY = 2 + titleLines + searchLines
+
 	body := m.renderBody(innerW, contentH)
 	hints := m.renderHints(innerW)
 
@@ -227,20 +258,46 @@ func (m *DetailModel) updateSearch() {
 
 // --- mouse handling ---
 
+// visualXToByte maps a visual column position (0-indexed) to a byte offset
+// within the given line, accounting for CJK fullwidth characters.
+func visualXToByte(line string, targetX int) int {
+	if targetX <= 0 {
+		return 0
+	}
+	visualW := 0
+	for i, r := range line {
+		rw := 1
+		if r > 127 {
+			rw = lipgloss.Width(string(r))
+		}
+		if visualW+rw > targetX {
+			return i
+		}
+		visualW += rw
+	}
+	return len(line)
+}
+
 func (m *DetailModel) handleMouse(msg tea.MouseMsg) {
 	lines := strings.Split(m.Content, "\n")
 	if len(lines) == 0 {
 		return
 	}
 
-	// Map screen Y to content line (approximate: title+search+divider ~ 4 lines).
-	contentY := msg.Y - 4
+	// Map popup-relative Y to content line using dynamic header height.
+	contentY := msg.Y - m.bodyStartY
 	if contentY < 0 {
 		return
 	}
 	idx := contentY + m.scroll
 	if idx >= len(lines) {
 		return
+	}
+	// Map popup-relative X to visual column within the content area.
+	// Content starts after left border(1) + left padding(1) = 2.
+	col := msg.X - 2
+	if col < 0 {
+		col = 0
 	}
 
 	switch msg.Button {
@@ -256,28 +313,54 @@ func (m *DetailModel) handleMouse(msg tea.MouseMsg) {
 		switch msg.Action {
 		case tea.MouseActionPress:
 			m.copyActive = true
+			m.copyAnchorX = col
 			m.copyAnchorY = idx
+			m.copyFocusX = col
 			m.copyFocusY = idx
 		case tea.MouseActionMotion:
 			if m.copyActive {
+				m.copyFocusX = col
 				m.copyFocusY = idx
 			}
 		case tea.MouseActionRelease:
 			if m.copyActive {
 				m.copyActive = false
-				start, end := m.copyAnchorY, m.copyFocusY
-				if start > end {
-					start, end = end, start
-				}
-				if end < len(lines) {
-					text := strings.Join(lines[start:end+1], "\n")
-					if text != "" {
-						copyToClipboard(text)
-					}
+				text := m.extractCopyText(lines)
+				if text != "" {
+					copyToClipboard(text)
 				}
 			}
 		}
 	}
+}
+
+// extractCopyText extracts character-precise text from the selected region
+// using visual column → byte offset mapping.
+func (m *DetailModel) extractCopyText(lines []string) string {
+	sx, sy, ex, ey := m.copyAnchorX, m.copyAnchorY, m.copyFocusX, m.copyFocusY
+	if sy > ey || (sy == ey && sx > ex) {
+		sx, sy, ex, ey = ex, ey, sx, sy
+	}
+	if sy >= len(lines) || ey >= len(lines) {
+		return ""
+	}
+
+	var result []string
+	for i := sy; i <= ey; i++ {
+		line := stripAnsi(lines[i])
+		if i == sy && i == ey {
+			start := visualXToByte(line, sx)
+			end := visualXToByte(line, ex+1) // +1 to include character under cursor
+			result = append(result, line[start:end])
+		} else if i == sy {
+			result = append(result, line[visualXToByte(line, sx):])
+		} else if i == ey {
+			result = append(result, line[:visualXToByte(line, ex+1)])
+		} else {
+			result = append(result, line)
+		}
+	}
+	return strings.Join(result, "\n")
 }
 
 // --- rendering ---
@@ -360,30 +443,44 @@ func (m *DetailModel) renderBody(w, maxLines int) string {
 		end = len(lines)
 	}
 
-	// Copy mode selection range.
-	cpStart, cpEnd := m.copyAnchorY, m.copyFocusY
-	if cpStart > cpEnd {
-		cpStart, cpEnd = cpEnd, cpStart
-	}
-	selStyle := lipgloss.NewStyle().Background(Accent).Foreground(TextColor)
+	// Copy mode selection range — character-precise visual columns.
+		const selBg = "\x1b[48;5;24m" // dark blue, matching outer CopyMode
+		var sx, sy, ex, ey int
+		if m.copyActive {
+			sx, sy, ex, ey = m.copyAnchorX, m.copyAnchorY, m.copyFocusX, m.copyFocusY
+			if sy > ey || (sy == ey && sx > ex) {
+				sx, sy, ex, ey = ex, ey, sx, sy
+			}
+		}
 
-	var visible []string
-	for i := m.scroll; i < end; i++ {
-		line := lines[i]
-		if len(line) > w-2 {
-			line = line[:w-5] + "..."
-		}
-		// Search match highlight.
-		if m.searchMode && m.searchQ != "" && m.searchIdx >= 0 &&
-			m.searchIdx < len(m.searchMatches) &&
-			m.searchMatches[m.searchIdx].Line == i {
-			line = highlightMatch(line, m.searchQ)
-		}
-		// Copy selection highlight.
-		if m.copyActive && i >= cpStart && i <= cpEnd {
-			line = selStyle.Render(line)
-		}
-		visible = append(visible, line)
+		var visible []string
+		for i := m.scroll; i < end; i++ {
+			line := lines[i]
+			if lipgloss.Width(line) > w {
+				line = ansi.Truncate(line, w-3, "...")
+			}
+			// Search match highlight.
+			if m.searchMode && m.searchQ != "" && m.searchIdx >= 0 &&
+				m.searchIdx < len(m.searchMatches) &&
+				m.searchMatches[m.searchIdx].Line == i {
+				line = highlightMatch(line, m.searchQ)
+			}
+			// Copy selection highlight — character-precise via injectBgRange.
+			if m.copyActive {
+				switch {
+				case i < sy || i > ey:
+					// no highlight
+				case sy == ey && i == sy:
+					line = injectBgRange(line, selBg, sx, ex)
+				case i == sy:
+					line = injectBgRange(line, selBg, sx, -1)
+				case i == ey:
+					line = injectBgRange(line, selBg, 0, ex)
+				default:
+					line = injectBgRange(line, selBg, 0, -1)
+				}
+			}
+			visible = append(visible, line)
 	}
 
 	return lipgloss.NewStyle().Foreground(TextColor).Width(w).

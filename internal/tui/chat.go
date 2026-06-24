@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/raydraw/ergate/internal/config"
 	"github.com/raydraw/ergate/internal/engine"
 	"github.com/raydraw/ergate/internal/llm"
@@ -95,6 +97,11 @@ func (m *ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.msgList.SetSize(wsm.Width, m.viewportHeight())
 		m.input.SetWidth(wsm.Width - 4)
 		m.viewDirty = true // width change requires re-wrap
+		// Keep detailModel dimensions in sync so Bounds() stays accurate.
+		if m.detailModel != nil {
+			newModel, _ := m.detailModel.Update(wsm)
+			m.detailModel = newModel.(*DetailModel)
+		}
 		return m, nil
 	}
 
@@ -161,10 +168,6 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Type == tea.KeyEnter || msg.Type == tea.KeyEsc {
 				m.overlays.Hide()
 			}
-		case OverlayDetail, OverlayToolChain:
-			if msg.Type == tea.KeyEsc || (len(msg.Runes) == 1 && msg.Runes[0] == 'q') {
-				m.overlays.Hide()
-			}
 			if msg.Type == tea.KeyUp || (len(msg.Runes) == 1 && msg.Runes[0] == 'k') {
 				if o.DetailScroll > 0 {
 					o.DetailScroll--
@@ -188,22 +191,42 @@ func (m *ChatModel) handleOverlayEvent(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case tea.MouseMsg:
-		switch o.Kind {
-		case OverlayDetail, OverlayToolChain:
-			m.handleOverlayMouse(o, msg)
-		}
-		return m, nil
+		return m, nil // mouse blocked during overlay
 	}
 	return m, nil
 }
 
 
 // handleDetailMsg routes keyboard/mouse events to the detail popup model.
-// Non-input messages (WindowSize, etc.) pass through.
+// Mouse coordinates are adjusted to popup-relative before forwarding so
+// DetailModel's internal copy-mode / scroll math works correctly.
+// WindowSize is also forwarded to keep DetailModel dimensions in sync.
+// Clicks outside the popup bounds dismiss it.
 func (m *ChatModel) handleDetailMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg, tea.MouseMsg:
-		// Route to detailModel only; block propagation.
+	case tea.WindowSizeMsg:
+		// Forward to detailModel so its dimensions stay in sync with chat.
+		newModel, _ := m.detailModel.Update(msg)
+		m.detailModel = newModel.(*DetailModel)
+		return m, nil
+	case tea.MouseMsg:
+		bx, by, bw, bh := m.detailModel.Bounds(m.width, m.height)
+		// Click outside popup bounds → dismiss.
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			if msg.X < bx || msg.X >= bx+bw || msg.Y < by || msg.Y >= by+bh {
+				m.detailModel = nil
+				m.viewDirty = true
+				return m, nil
+			}
+		}
+		// Adjust to popup-relative coordinates for correct copy-mode math.
+		relMsg := msg
+		relMsg.X -= bx
+		relMsg.Y -= by
+		newModel, cmd := m.detailModel.Update(relMsg)
+		m.detailModel = newModel.(*DetailModel)
+		return m, cmd
+	case tea.KeyMsg:
 		newModel, cmd := m.detailModel.Update(msg)
 		m.detailModel = newModel.(*DetailModel)
 		return m, cmd
@@ -212,66 +235,9 @@ func (m *ChatModel) handleDetailMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewDirty = true
 		return m, nil
 	}
-	// Non-input messages (WindowSize, etc.) pass through to chat.
+	// Non-input messages pass through to chat.
 	return m, nil
 }
-
-// handleOverlayMouse handles mouse events for copy mode within detail/toolchain overlays.
-func (m *ChatModel) handleOverlayMouse(o *Overlay, msg tea.MouseMsg) {
-	contentLines := strings.Split(o.DetailContent, "\n")
-	if len(contentLines) == 0 {
-		return
-	}
-
-	// Map screen Y to content-line index accounting for ContentStartY + DetailScroll.
-	detailY := msg.Y - o.ContentStartY
-	if detailY < 0 {
-		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			o.CopyActive = false
-		}
-		return
-	}
-	contentIdx := detailY + o.DetailScroll
-	if contentIdx >= len(contentLines) {
-		return
-	}
-
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if o.DetailScroll > 0 {
-			o.DetailScroll--
-		}
-	case tea.MouseButtonWheelDown:
-		o.DetailScroll++
-	case tea.MouseButtonLeft:
-		switch msg.Action {
-		case tea.MouseActionPress:
-			o.CopyActive = true
-			o.CopyAnchorY = contentIdx
-			o.CopyFocusY = contentIdx
-		case tea.MouseActionMotion:
-			if o.CopyActive {
-				o.CopyFocusY = contentIdx
-			}
-		case tea.MouseActionRelease:
-			if o.CopyActive {
-				o.CopyActive = false
-				start := o.CopyAnchorY
-				end := o.CopyFocusY
-				if start > end {
-					start, end = end, start
-				}
-				if end < len(contentLines) {
-					text := strings.Join(contentLines[start:end+1], "\n")
-					if text != "" {
-						copyToClipboard(text)
-					}
-				}
-			}
-		}
-	}
-}
-
 
 // LoadSession loads a session by ID, clearing the current chat state
 // and importing the session into the engine.
@@ -409,18 +375,68 @@ func (m *ChatModel) View() string {
 		}
 	}
 
-	// Detail popup (centered overlay via PlaceOverlay).
+	// Detail popup — centered overlay on top of dimmed chat background.
 	if m.detailModel != nil {
 		overlay := m.detailModel.View()
-		return lipgloss.Place(m.width, m.height,
-			lipgloss.Center, lipgloss.Center,
-			overlay,
-			lipgloss.WithWhitespaceChars("░"),
-			lipgloss.WithWhitespaceForeground(Subtle),
-		)
+		return placeOverlay(overlay, result, m.width, m.height)
 	}
 
-		return result
+	return result
+}
+
+// sgrStripRe matches ANSI SGR sequences for stripping before masking.
+var sgrStripRe = regexp.MustCompile(`\x1b\[[\d;]*m`)
+
+// stripSGR removes all ANSI SGR sequences so mask styling applies uniformly.
+func stripSGR(s string) string {
+	return sgrStripRe.ReplaceAllString(s, "")
+}
+
+// placeOverlay places fg centered on top of bg. Background chat content is
+// stripped of ANSI styling and rendered with ChatDimStyle as a uniform mask
+// layer — mimicking opencode's PlaceOverlay approach.
+func placeOverlay(fg, bg string, termW, termH int) string {
+	fgLines := strings.Split(fg, "\n")
+	bgLines := strings.Split(bg, "\n")
+
+	fgW := lipgloss.Width(fg)
+	fgH := len(fgLines)
+
+	// Center position.
+	x := max(0, (termW-fgW)/2)
+	y := max(0, (termH-fgH)/2)
+
+	// Pad bg to termH.
+	for len(bgLines) < termH {
+		bgLines = append(bgLines, "")
+	}
+
+	dimStyle := ChatDimStyle
+
+	var result []string
+	for i := 0; i < termH; i++ {
+		var line string
+		if i < len(bgLines) {
+			line = bgLines[i]
+		}
+		// Pad to full width first so ansi.Cut has well-defined bounds.
+		lineW := lipgloss.Width(line)
+		if lineW < termW {
+			line += strings.Repeat(" ", termW-lineW)
+		}
+
+		if i >= y && i < y+fgH {
+			// Overlay row: masked bg on left + popup + masked bg on right.
+			fgLine := fgLines[i-y]
+			left := dimStyle.Render(stripSGR(ansi.Cut(line, 0, x)))
+			right := dimStyle.Render(stripSGR(ansi.Cut(line, x+fgW, termW)))
+			result = append(result, left+fgLine+right)
+		} else {
+			result = append(result, dimStyle.Render(stripSGR(line)))
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
 
 // welcomeView renders the initial welcome screen.
@@ -452,68 +468,6 @@ func (m *ChatModel) viewportHeight() int {
 	oh := m.overlayReservedHeight()
 	return max(m.height-header-spacer-tbH-input-stat-oh, 3)
 }
-
-// renderModalOverlay renders a centered detail/toolchain popup with dimmed
-// chat content as background. TUI lacks z-layering, so we truncate the
-// chat to the top portion, show the popup centered, and dim background lines.
-func (m *ChatModel) renderModalOverlay(o *Overlay, wrapped, statusBar string) string {
-	detailView := renderDetailOverlay(o, m.width, m.height/2)
-	detailLines := strings.Split(detailView, "\n")
-	detailH := len(detailLines)
-
-	statusLines := strings.Split(statusBar, "\n")
-	statusH := len(statusLines)
-
-	totalH := m.height
-	// If popup is taller than viewport, just show it alone.
-	if detailH >= totalH-1 {
-		o.ContentStartY = 0 // no offset needed, entire screen is popup
-		return detailView
-	}
-
-	// Available space above and below popup.
-	gap := totalH - detailH - statusH
-	aboveH := gap / 2
-
-	// Add popup's screen Y offset to body position for copy mode.
-	o.ContentStartY += aboveH
-	belowH := gap - aboveH
-
-	dimStyle := ChatDimStyle
-
-	// Build top section: last `aboveH` lines of chat, dimmed.
-	chatLines := strings.Split(wrapped, "\n")
-	var topLines []string
-	if len(chatLines) > aboveH {
-		topLines = chatLines[len(chatLines)-aboveH:]
-	} else {
-		pad := aboveH - len(chatLines)
-		for range pad {
-			topLines = append(topLines, "")
-		}
-		topLines = append(topLines, chatLines...)
-	}
-	// Dim the background chat lines.
-	for i, l := range topLines {
-		topLines[i] = dimStyle.Render(l)
-	}
-
-	// Build bottom section: blank padding + status bar.
-	var bottomLines []string
-	for range belowH {
-		bottomLines = append(bottomLines, "")
-	}
-	bottomLines = append(bottomLines, statusLines...)
-
-	// Assemble: top (dimmed chat) + popup + bottom (padding + status).
-	var all []string
-	all = append(all, topLines...)
-	all = append(all, detailLines...)
-	all = append(all, bottomLines...)
-
-	return strings.Join(all, "\n")
-}
-
 // overlayReservedHeight returns the number of rows reserved for an inline overlay.
 func (m *ChatModel) overlayReservedHeight() int {
 	if !m.overlays.IsActive() {
@@ -522,9 +476,6 @@ func (m *ChatModel) overlayReservedHeight() int {
 	o := m.overlays.Active()
 	if o.Kind == OverlayPermission {
 		return 8 // permission dialog fixed height
-	}
-	if o.Kind == OverlayToolChain {
-		return m.height / 2
 	}
 	return 0 // detail/session picker are modals rendered outside viewport
 }
@@ -675,7 +626,22 @@ func (m *ChatModel) handleItemClick(x, y int) tea.Cmd {
 		case "toolchain":
 			return m.openToolChainOverlayFor(msg)
 		case "thinking":
+			if !msg.IsFoldable() {
+				return nil
+			}
 			m.detailModel = NewDetailModel("[thinking]", msg.Content, m.width, m.height)
+			m.viewDirty = true
+			return nil
+		case "tool":
+			if !msg.IsFoldable() {
+				return nil
+			}
+			title := "Tool Output"
+			content := msg.Detail
+			if content == "" {
+				content = msg.Content
+			}
+			m.detailModel = NewDetailModel(title, content, m.width, m.height)
 			m.viewDirty = true
 			return nil
 		}

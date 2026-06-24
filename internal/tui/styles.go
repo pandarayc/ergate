@@ -16,6 +16,7 @@ var (
 	BgDark    = lipgloss.Color("#111827")
 	BgPanel   = lipgloss.Color("#1F2937")
 	BorderDim = lipgloss.Color("#374151")
+	MaskBg    = lipgloss.Color("#0d0e1a") // slight purple tint for overlay mask
 	TextColor = lipgloss.Color("#F9FAFB")
 
 	// Style definitions
@@ -80,8 +81,12 @@ var (
 			Italic(true)
 
 	// ChatDimStyle dims background chat content behind modal overlays.
+	// Uses background color change (not just foreground) because most chat
+	// content sets explicit foreground colors that would override Subtle.
+	// Background colors are rarely set in chat, so the mask tint is visible.
 	ChatDimStyle = lipgloss.NewStyle().
-			Foreground(Subtle)
+			Foreground(Subtle).
+			Background(MaskBg)
 
 
 	// AssistantBorderStyle is the left border for assistant message blocks.

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // MaxToolOutputLines is the fold threshold for tool output.
@@ -39,12 +40,16 @@ func renderTool(m *ChatMessage, width int) string {
 			// Tool result: show first line of content + fold hint.
 			if isToolCall {
 				label := ToolStyle.Render(m.Content)
-				hint := FoldStyle.Render(fmt.Sprintf("─── %d lines ─ click to expand", total))
+				hint := FoldStyle.Render(fmt.Sprintf("─── %d lines · click to view in pop layer", total))
 				return bar + " " + label + "\n" + hint
 			}
 			// Tool result: show first line preview + fold hint on next line.
 			firstLine := strings.SplitN(m.Content, "\n", 2)[0]
-			hint := FoldStyle.Render(fmt.Sprintf("─── %d lines ─ click to expand", total))
+			maxW := contentW - 2 // bar(1) + space(1)
+			if lipgloss.Width(firstLine) > maxW {
+				firstLine = ansi.Truncate(firstLine, maxW-3, "...")
+			}
+			hint := FoldStyle.Render(fmt.Sprintf("─── %d lines · click to view in pop layer", total))
 			return bar + " " + ToolResultStyle.Render(firstLine) + "\n" + hint
 		}
 
@@ -62,11 +67,18 @@ func renderTool(m *ChatMessage, width int) string {
 	if isToolCall {
 		result := bar + " " + ToolStyle.Render(m.Content)
 		disp := renderToolDetail(m.Content, m.Detail)
+		if lipgloss.Width(disp) > contentW-2 {
+			disp = ansi.Truncate(disp, contentW-5, "...")
+		}
 		result += "\n" + ToolResultStyle.Render(disp)
 		return result
 	}
-	// Tool result, no overflow: just show the content.
-	return bar + " " + ToolResultStyle.Render(m.Content)
+	// Tool result, no overflow: show content truncated to fit.
+	text := m.Content
+	if lipgloss.Width(text) > contentW-2 {
+		text = ansi.Truncate(text, contentW-5, "...")
+	}
+	return bar + " " + ToolResultStyle.Render(text)
 }
 
 // editInput mirrors the tool input for parsing Edit tool detail JSON.
