@@ -135,7 +135,10 @@ class ErgateAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        cmd = "ergate --headless -p " + shlex.quote(instruction)
+        cmd = (
+            "ergate -c " + shlex.quote(EREGATE_CONFIG_DIR + "/config.yaml") +
+            " --headless -p " + shlex.quote(instruction)
+        )
 
         self.logger.info(
             f"Running ergate (model={self.extra_env.get('ERGATE_MODEL', 'default')}, "
