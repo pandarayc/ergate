@@ -112,8 +112,9 @@ class ErgateAgent(BaseAgent):
         ergate_env = dict(self.extra_env)  # copy
         api_key = ergate_env.get("ERGATE_API_KEY", "")
         model = ergate_env.get("ERGATE_MODEL", "deepseek-v4-pro")
-        base_url = ergate_env.get("ERGATE_BASE_URL", "")
-        api_provider = ergate_env.get("ERGATE_API_PROVIDER", "deepseek")
+        api_provider = ergate_env.get("ERGATE_API_PROVIDER", "anthropic")
+        base_url = ergate_env.get("ERGATE_BASE_URL", "https://api.deepseek.com/anthropic")
+        compat = ergate_env.get("ERGATE_COMPAT", "anthropic")  # API protocol: anthropic|openai
         max_turns = ergate_env.get("ERGATE_MAX_TURNS", str(self.max_turns))
 
         self.logger.info(
@@ -127,10 +128,14 @@ class ErgateAgent(BaseAgent):
         config_yaml = textwrap.dedent(f"""\
         api_provider: {api_provider}
         api_key: "{api_key}"
-        base_url: "{base_url}"
         model: "{model}"
         max_turns: {max_turns}
         permission_mode: bypass
+        providers:
+          {api_provider}:
+            compat: {compat}
+            base_url: "{base_url}"
+            api_key: "{api_key}"
         """)
 
         await environment.exec(f"mkdir -p {EREGATE_CONFIG_DIR}")
