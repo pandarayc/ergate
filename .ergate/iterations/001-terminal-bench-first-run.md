@@ -80,30 +80,29 @@ timeout_sec=1200,  # was 600
 
 ---
 
-## Phase 3: 验证（待跑）
+## Phase 3: 验证
 
-```bash
-harbor run \
-  --agent-import-path tasks.ergate_agent:ErgateAgent \
-  --ae ERGATE_API_KEY=$ANTHROPIC_AUTH_TOKEN \
-  --ae ERGATE_BASE_URL=$ANTHROPIC_BASE_URL \
-  --ae ERGATE_MODEL=deepseek-v4-pro \
-  --ae ERGATE_MAX_TURNS=50 \
-  -d terminal-bench/terminal-bench-2 \
-  -l 10 --timeout-multiplier 2.0
+> 详见 [迭代 002](./002-tls-timeout-fix.md)
+
+```
+Score: 0.300 (+0.100)
+├─ TLS errors: 2→0 ✅
+├─ distribution-search: ERR→1 ✅
+├─ compile-compcert: 0→ERR (TLS修好→超时)
+└─ overfull-hbox: 0→0 (TLS修好但任务复杂)
 ```
 
 ---
 
 ## 对比
 
-| 指标 | 首跑 | 目标 | 实际(待跑) |
-|------|------|------|-----------|
-| Score | 0.200 | 0.400+ | - |
-| Passed | 2 | 4+ | - |
-| TLS errors | 2 | 0 | - |
-| Timeout | 3 | 0 | - |
-| 配置 | max_turns=25, timeout=600s | max_turns=50, timeout=1200s, ca-certs | - |
+| 指标 | 首跑 | 目标 | 002实际 |
+|------|------|------|---------|
+| Score | 0.200 | 0.400+ | **0.300** |
+| Passed | 2 | 4+ | 3 |
+| TLS errors | 2 | 0 | **0** ✅ |
+| Timeout | 3 | 0 | 4 |
+| 配置 | max_turns=25, timeout=600s | max_turns=50, timeout=1200s | timeout=1200s, max_turns=25(未生效) |
 
 ---
 

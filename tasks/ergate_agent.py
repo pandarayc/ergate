@@ -108,6 +108,7 @@ class ErgateAgent(BaseAgent):
         )
 
         # 2. Write ergate config file from env vars.
+        self.logger.info(f"extra_env keys: {list(self.extra_env.keys())}")
         api_key = self.extra_env.get("ERGATE_API_KEY", "")
         base_url = self.extra_env.get("ERGATE_BASE_URL", "")
         model = self.extra_env.get("ERGATE_MODEL", "deepseek-v4-pro")
