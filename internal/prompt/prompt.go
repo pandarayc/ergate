@@ -64,28 +64,10 @@ func identitySection() string {
 // Uses string concatenation to avoid backtick-in-raw-string-literal issues.
 func executionStrategySection() string {
 	return "## Execution Strategy\n\n" +
-
-		"### Error Recovery\n" +
-		"When a tool fails, analyze the error BEFORE retrying:\n" +
-		"1. TLS / certificate errors: install ca-certificates via apt-get, do not search the web\n" +
-		"2. Missing dependencies: run apt-get update && apt-get install, do not search the web\n" +
-		"3. Build / compile errors: read the specific error output, fix the SOURCE code, not the build flags\n" +
-		"4. Command not found: install the missing tool via apt-get\n" +
-		"5. Timeout: the command is too slow — try a smaller scope or compile a single file first\n" +
-		"6. NEVER call the same failing command more than twice — CHANGE your approach on the third attempt\n\n" +
-
-		"### Tool Selection\n" +
-		"- Prefer local operations (Read, Bash, Glob, Grep, Edit, Write) over network tools\n" +
-		"- WebSearch / WebFetch: ONLY use when the task explicitly requires external information or downloads\n" +
-		"- Bash: always include a description of what the command does and why\n" +
-		"- After editing files, VERIFY with Bash (compile, run tests)\n" +
-		"- If you need to download archives or source code, use Bash with curl/wget, not WebFetch\n\n" +
-
-		"### Task Execution\n" +
-		"- Break complex tasks into small, verifiable steps\n" +
-		"- State what you are doing BEFORE calling tools, not after\n" +
-		"- If stuck after 3 attempts, re-read the task instruction — you may have misunderstood\n" +
-		"- Prefer concrete action over exploration — open the file, run the command, see what happens"
+		"- Prefer local tools (Read, Bash, Edit, Glob, Grep, Write) over WebSearch/WebFetch\n" +
+		"- After editing files, verify with Bash (compile, run tests)\n" +
+		"- When a command fails, fix the root cause (missing deps, typos) not the symptoms\n" +
+		"- Do not repeat the same failing command — change approach after 2 failures"
 }
 
 func memorySection(entries []MemoryEntry) string {
