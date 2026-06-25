@@ -94,6 +94,13 @@ class ErgateAgent(BaseAgent):
             )
 
         self.logger.info(f"Uploading ergate binary from {binary_path}")
+
+        # Install ca-certificates for TLS (fixes x509 errors on minimal containers).
+        await environment.exec(
+            "apt-get update -qq && apt-get install -y -qq ca-certificates 2>/dev/null || true",
+            timeout_sec=60,
+        )
+
         await environment.upload_file(binary_path, f"/tmp/{AGENT_BINARY}")
         await environment.exec(
             f"chmod +x /tmp/{AGENT_BINARY} && "
@@ -157,7 +164,7 @@ class ErgateAgent(BaseAgent):
             with environment.scoped_output_callback(on_output):
                 result = await environment.exec(
                     cmd,
-                    timeout_sec=600,
+                    timeout_sec=1200,
                 )
         except asyncio.TimeoutError:
             self.logger.warning("Ergate timed out")
