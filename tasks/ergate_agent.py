@@ -44,6 +44,7 @@ class ErgateAgent(BaseAgent):
         skills_dir: str | None = None,
         max_turns: int = 30,
         agent_binary: str | None = None,
+        extra_env: dict | None = None,
         **kwargs,
     ):
         super().__init__(
@@ -54,6 +55,7 @@ class ErgateAgent(BaseAgent):
             skills_dir=skills_dir,
         )
         self.max_turns = max_turns
+        self.extra_env = extra_env or {}
         # Path to the ergate binary on the HOST (for upload).
         self._agent_binary = agent_binary or self._find_binary()
 
@@ -109,18 +111,26 @@ class ErgateAgent(BaseAgent):
         # Build CLI command with proper quoting.
         cmd = "ergate --headless -p " + shlex.quote(instruction)
 
-        # Collect env vars for ergate from the Python process env.
-        # Harbor's --agent-env sets these in os.environ.
+        # Collect env vars for ergate. Harbor's --agent-env are passed
+        # to __init__ as extra_env, but may also appear in os.environ.
         ergate_env = {}
-        for key in (
+        ergate_keys = (
             "ERGATE_API_PROVIDER", "ERGATE_API_KEY",
             "ERGATE_BASE_URL", "ERGATE_MODEL",
             "ERGATE_MAX_TURNS", "ERGATE_MAX_TOKENS",
-        ):
+        )
+        for key in ergate_keys:
             if key in os.environ:
                 ergate_env[key] = os.environ[key]
+        # extra_env (from --agent-env) overrides os.environ.
+        ergate_env.update({k: v for k, v in self.extra_env.items() if k in ergate_keys})
 
-        self.logger.info(f"Running ergate (env keys: {list(ergate_env.keys())})")
+        api_ok = "ERGATE_API_KEY" in ergate_env
+        self.logger.info(
+            f"Running ergate (api_key={'SET' if api_ok else 'MISSING'}, "
+            f"provider={ergate_env.get('ERGATE_API_PROVIDER', 'default')}, "
+            f"model={ergate_env.get('ERGATE_MODEL', 'default')})"
+        )
         self.logger.info(f"Instruction: {instruction[:100]}...")
 
         # Collect output as it streams.
