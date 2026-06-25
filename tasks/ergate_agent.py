@@ -107,18 +107,25 @@ class ErgateAgent(BaseAgent):
             f"mv /tmp/{AGENT_BINARY} /usr/local/bin/ergate"
         )
 
-        # 2. Write ergate config file from env vars.
-        self.logger.info(f"extra_env keys: {list(self.extra_env.keys())}")
-        api_key = self.extra_env.get("ERGATE_API_KEY", "")
-        base_url = self.extra_env.get("ERGATE_BASE_URL", "")
-        model = self.extra_env.get("ERGATE_MODEL", "deepseek-v4-pro")
-        max_turns = self.extra_env.get("ERGATE_MAX_TURNS", str(self.max_turns))
+        # 2. Build ergate env vars from extra_env (Harbor --ae flags).
+        # If not set, ergate reads from its own config/env — no hardcoded defaults.
+        ergate_env = dict(self.extra_env)  # copy
+        api_key = ergate_env.get("ERGATE_API_KEY", "")
+        model = ergate_env.get("ERGATE_MODEL", "deepseek-v4-pro")
+        base_url = ergate_env.get("ERGATE_BASE_URL", "")
+        api_provider = ergate_env.get("ERGATE_API_PROVIDER", "deepseek")
+        max_turns = ergate_env.get("ERGATE_MAX_TURNS", str(self.max_turns))
+
+        self.logger.info(
+            f"Config: provider={api_provider} model={model} "
+            f"max_turns={max_turns} api_key={'SET' if api_key else 'MISSING'}"
+        )
 
         if not api_key:
             self.logger.warning("ERGATE_API_KEY not set — ergate may fail")
 
         config_yaml = textwrap.dedent(f"""\
-        api_provider: anthropic
+        api_provider: {api_provider}
         api_key: "{api_key}"
         base_url: "{base_url}"
         model: "{model}"
