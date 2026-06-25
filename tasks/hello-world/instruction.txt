@@ -1,0 +1,1 @@
+Write a Go program in hello.go that prints "Hello, Ergate!" and compile it successfully.

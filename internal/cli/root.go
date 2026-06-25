@@ -38,6 +38,8 @@ Default mode is interactive TUI. Use -p for one-shot queries, --headless for raw
 	cmd.Flags().BoolVarP(&resume, "resume", "r", false, "Resume the latest session")
 	cmd.Flags().BoolP("version", "v", false, "Show version")
 
+	cmd.AddCommand(BenchCmd())
+
 	return cmd
 }
 
