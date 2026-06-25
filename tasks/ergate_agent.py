@@ -106,18 +106,22 @@ class ErgateAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         """Run ergate against the task instruction."""
-        # Build CLI command.
-        # Ergate uses env vars for config: ERGATE_API_PROVIDER, ERGATE_API_KEY,
-        # ERGATE_BASE_URL, ERGATE_MODEL. Pass these via Harbor's --agent-env.
-        escaped = shlex.quote(instruction)
-        cmd_parts = [
-            "ergate",
-            "--headless",
-            "-p", escaped,
-        ]
+        # Build CLI command with proper quoting.
+        cmd = "ergate --headless -p " + shlex.quote(instruction)
 
-        cmd = " ".join(cmd_parts)
-        self.logger.info(f"Running: {cmd}")
+        # Collect env vars for ergate from the Python process env.
+        # Harbor's --agent-env sets these in os.environ.
+        ergate_env = {}
+        for key in (
+            "ERGATE_API_PROVIDER", "ERGATE_API_KEY",
+            "ERGATE_BASE_URL", "ERGATE_MODEL",
+            "ERGATE_MAX_TURNS", "ERGATE_MAX_TOKENS",
+        ):
+            if key in os.environ:
+                ergate_env[key] = os.environ[key]
+
+        self.logger.info(f"Running ergate (env keys: {list(ergate_env.keys())})")
+        self.logger.info(f"Instruction: {instruction[:100]}...")
 
         # Collect output as it streams.
         collected: list[str] = []
@@ -131,7 +135,8 @@ class ErgateAgent(BaseAgent):
             with environment.scoped_output_callback(on_output):
                 result = await environment.exec(
                     cmd,
-                    timeout_sec=600,  # 10 min timeout for agent execution
+                    env=ergate_env,
+                    timeout_sec=600,
                 )
         except asyncio.TimeoutError:
             self.logger.warning("Ergate timed out")
@@ -143,5 +148,5 @@ class ErgateAgent(BaseAgent):
 
         context.metadata = {
             "exit_code": result.return_code if result else -1,
-            "output": output[:50000],  # Cap to avoid huge contexts.
+            "output": output[:50000],
         }
