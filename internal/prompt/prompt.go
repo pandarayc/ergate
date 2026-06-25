@@ -1,5 +1,3 @@
-// Package prompt builds the system prompt with clear section structure
-// and an explicit boundary between cacheable (stable) and dynamic content.
 package prompt
 
 import (
@@ -7,59 +5,33 @@ import (
 	"strings"
 )
 
-// Input is the data needed to assemble the full system prompt.
 type Input struct {
-	// Stable (same for entire session — cacheable prefix)
-	Memory []MemoryEntry
-	Agent  *MemoryEntry
-
-	// Dynamic (may change between turns — goes after cache boundary)
+	Memory     []MemoryEntry
+	Agent      *MemoryEntry
 	Skills     []SkillInfo
 	InPlanMode bool
-
-	// Environment
 	CWD         string
 	CurrentDate string
 	Shell       string
 	IsGitRepo   bool
 }
 
-// MemoryEntry is a named piece of persistent context.
 type MemoryEntry struct {
 	Name        string
 	Description string
 	Content     string
 }
 
-// SkillInfo is a lightweight skill reference for prompt rendering.
 type SkillInfo struct {
 	Name        string
 	Description string
 }
 
-// Build assembles the complete system prompt.
-//
-// Structure:
-//
-//	=== Stable (cacheable) ===
-//	  Identity
-//	  Rules & behavior
-//	  Memory entries
-//	  Agent instructions (CLAUDE.md)
-//	=== Cache boundary ===
-//	=== Dynamic ===
-//	  Environment context
-//	  Available skills
-//	  Plan mode (when active)
-//
-// For OpenAI-compatible providers (DeepSeek), prefer BuildStable + BuildDynamicContext
-// to keep the system message immutable for prefix-cache stability.
 func Build(in Input) string {
 	var parts []string
 
-	// === Stable (cacheable) ===
-
 	parts = append(parts, identitySection())
+	parts = append(parts, executionStrategySection())
 
 	if len(in.Memory) > 0 {
 		parts = append(parts, memorySection(in.Memory))
@@ -68,12 +40,7 @@ func Build(in Input) string {
 		parts = append(parts, agentInstructionsSection(*in.Agent))
 	}
 
-	// Cache boundary — separates stable prefix from dynamic suffix.
-	// Content blocks before this line should have cache_control set.
 	parts = append(parts, cacheBoundarySection())
-
-	// === Dynamic ===
-
 	parts = append(parts, environmentSection(in.CWD, in.CurrentDate, in.Shell, in.IsGitRepo))
 
 	if len(in.Skills) > 0 {
@@ -86,14 +53,39 @@ func Build(in Input) string {
 	return strings.Join(parts, "\n")
 }
 
-// --- stable sections ---
-
 func identitySection() string {
-	return `## Identity
+	return "## Identity\n\n" +
+		"You are Ergate, You are a helpful\n" +
+		"AI assistant with access to software engineering tools for reading, writing,\n" +
+		"searching, and executing code."
+}
 
-You are Ergate, You are a helpful
-AI assistant with access to software engineering tools for reading, writing,
-searching, and executing code.`
+// executionStrategySection provides error recovery patterns and tool usage guidelines.
+// Uses string concatenation to avoid backtick-in-raw-string-literal issues.
+func executionStrategySection() string {
+	return "## Execution Strategy\n\n" +
+
+		"### Error Recovery\n" +
+		"When a tool fails, analyze the error BEFORE retrying:\n" +
+		"1. TLS / certificate errors: install ca-certificates via apt-get, do not search the web\n" +
+		"2. Missing dependencies: run apt-get update && apt-get install, do not search the web\n" +
+		"3. Build / compile errors: read the specific error output, fix the SOURCE code, not the build flags\n" +
+		"4. Command not found: install the missing tool via apt-get\n" +
+		"5. Timeout: the command is too slow — try a smaller scope or compile a single file first\n" +
+		"6. NEVER call the same failing command more than twice — CHANGE your approach on the third attempt\n\n" +
+
+		"### Tool Selection\n" +
+		"- Prefer local operations (Read, Bash, Glob, Grep, Edit, Write) over network tools\n" +
+		"- WebSearch / WebFetch: ONLY use when the task explicitly requires external information or downloads\n" +
+		"- Bash: always include a description of what the command does and why\n" +
+		"- After editing files, VERIFY with Bash (compile, run tests)\n" +
+		"- If you need to download archives or source code, use Bash with curl/wget, not WebFetch\n\n" +
+
+		"### Task Execution\n" +
+		"- Break complex tasks into small, verifiable steps\n" +
+		"- State what you are doing BEFORE calling tools, not after\n" +
+		"- If stuck after 3 attempts, re-read the task instruction — you may have misunderstood\n" +
+		"- Prefer concrete action over exploration — open the file, run the command, see what happens"
 }
 
 func memorySection(entries []MemoryEntry) string {
@@ -113,24 +105,19 @@ func agentInstructionsSection(entry MemoryEntry) string {
 	return fmt.Sprintf("## Project Instructions (%s)\n\n%s", entry.Name, entry.Content)
 }
 
-// --- cache boundary ---
-
 func cacheBoundarySection() string {
 	return "<!-- CACHE_BOUNDARY: content above is stable and cacheable -->"
 }
-
-// --- dynamic sections ---
 
 func environmentSection(cwd, currentDate, shell string, isGit bool) string {
 	gitInfo := ""
 	if isGit {
 		gitInfo = "\n- This is a git repository"
 	}
-	return fmt.Sprintf(`## Environment
-
-- Working directory: %s
-- Date: %s
-- Platform: %s%s`, cwd, currentDate, shell, gitInfo)
+	return fmt.Sprintf("## Environment\n\n"+
+		"- Working directory: %s\n"+
+		"- Date: %s\n"+
+		"- Platform: %s%s", cwd, currentDate, shell, gitInfo)
 }
 
 func skillsSection(skills []SkillInfo) string {
@@ -144,24 +131,20 @@ func skillsSection(skills []SkillInfo) string {
 }
 
 func planModeSection() string {
-	return `## Plan Mode
-
-You are in PLAN MODE. In this mode:
-- You may ONLY use read-only tools
-- You may NOT use write tools or execute shell commands
-- Your goal is to explore the codebase and design an implementation plan
-- Produce a clear, structured plan before asking to exit plan mode
-- When ready, use the ExitPlanMode tool to request plan approval
-
-Follow the design phase carefully. Do not implement anything yet.`
+	return "## Plan Mode\n\n" +
+		"You are in PLAN MODE. In this mode:\n" +
+		"- You may ONLY use read-only tools\n" +
+		"- You may NOT use write tools or execute shell commands\n" +
+		"- Your goal is to explore the codebase and design an implementation plan\n" +
+		"- Produce a clear, structured plan before asking to exit plan mode\n" +
+		"- When ready, use the ExitPlanMode tool to request plan approval\n\n" +
+		"Follow the design phase carefully. Do not implement anything yet."
 }
 
-// BuildStable returns only the cache-safe prefix (identity + memory + agent).
-// This is suitable for providers that use automatic prefix caching (DeepSeek/OpenAI),
-// where the system message must remain byte-identical between requests.
 func BuildStable(in Input) string {
 	var parts []string
 	parts = append(parts, identitySection())
+	parts = append(parts, executionStrategySection())
 	if len(in.Memory) > 0 {
 		parts = append(parts, memorySection(in.Memory))
 	}
@@ -171,8 +154,6 @@ func BuildStable(in Input) string {
 	return strings.Join(parts, "\n")
 }
 
-// BuildDynamicContext returns the environment, skills, and plan-mode sections
-// that should be injected outside the cacheable prefix (e.g. as the first user message).
 func BuildDynamicContext(in Input) string {
 	var parts []string
 	parts = append(parts, environmentSection(in.CWD, in.CurrentDate, in.Shell, in.IsGitRepo))
@@ -184,4 +165,3 @@ func BuildDynamicContext(in Input) string {
 	}
 	return strings.Join(parts, "\n")
 }
-
