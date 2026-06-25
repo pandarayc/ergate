@@ -47,3 +47,5 @@ config.yaml
 # Superpowers brainstorming artifacts
 .superpowers/
 cache_stats.log
+jobs/
+__pycache__/
