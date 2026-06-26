@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/raydraw/ergate/internal/bench"
+	"github.com/raydraw/ergate/internal/iteration"
 	"github.com/raydraw/ergate/internal/llm"
 	_ "github.com/raydraw/ergate/internal/llm/provider"
 	"github.com/raydraw/ergate/internal/tool"
@@ -34,7 +35,7 @@ var benchFlags = struct {
 	model    string
 	timeout  time.Duration
 	maxTurns int
-	output   string // JSON output file (for single task)
+	output   string // JSON output file (combined results)
 }{}
 
 // BenchCmd returns the bench subcommand tree.
@@ -137,14 +138,19 @@ func runBench(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\n📊 Results written to %s\n", benchFlags.output)
 	}
 
+	// Print cross-task failure pattern analysis.
+	if len(results) >= 2 {
+		printPatternAnalysis(results, nil, cfg.Model)
+	}
+
 	return nil
 }
 
 func writeResultsJSON(path string, results []*bench.Result) error {
 	type summary struct {
-		Total   int `json:"total"`
-		Passed  int `json:"passed"`
-		Failed  int `json:"failed"`
+		Total   int             `json:"total"`
+		Passed  int             `json:"passed"`
+		Failed  int             `json:"failed"`
 		Results []*bench.Result `json:"results"`
 	}
 	s := summary{Total: len(results), Results: results}
@@ -160,4 +166,65 @@ func writeResultsJSON(path string, results []*bench.Result) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+// printPatternAnalysis builds a RunLog from bench results, detects failure
+// patterns, and prints a structured analysis to stdout.
+func printPatternAnalysis(results []*bench.Result, prev *iteration.RunLog, model string) {
+	tasks := make([]iteration.TaskResult, len(results))
+	for i, r := range results {
+		tr := iteration.TaskResult{
+			TaskID:    r.TaskID,
+			Pass:      r.Pass,
+			Error:     r.Error,
+			TurnCount: r.Trace.TotalTurns,
+			ToolCount: r.Trace.TotalToolsRan,
+		}
+		if r.Trace != nil {
+			for _, k := range r.Trace.FailureKinds() {
+				tr.Failures = append(tr.Failures, k.String())
+			}
+		}
+		tasks[i] = tr
+	}
+
+	runLog := iteration.NewRunLog("", "ergate", model, "", "", tasks)
+	patterns := runLog.Patterns(prev)
+
+	fmt.Println()
+	fmt.Println("📊 Failure Patterns:")
+
+	if len(patterns) == 0 {
+		fmt.Println("   (no failures to analyze)")
+		return
+	}
+
+	for _, p := range patterns {
+		tag := signalTag(p.Signal)
+		fmt.Printf("   %s  %-16s (%d/%d, %.0f%%)\n",
+			tag, p.Kind, p.Count, runLog.Failed+runLog.Errors, p.Ratio*100)
+
+		if len(p.TaskIDs) > 0 {
+			fmt.Printf("   %s  Tasks: %s\n", strings.Repeat(" ", len(tag)), strings.Join(p.TaskIDs, ", "))
+		}
+		if p.Suggestion != "" {
+			fmt.Printf("   💡 %s\n", p.Suggestion)
+		}
+		fmt.Println()
+	}
+}
+
+func signalTag(signal string) string {
+	switch signal {
+	case "stubborn":
+		return "🔴"
+	case "recurring":
+		return "🟡"
+	case "dominant":
+		return "🟠"
+	case "clean":
+		return "🟢"
+	default:
+		return "⚪"
+	}
 }

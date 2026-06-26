@@ -34,6 +34,11 @@ type RunLog struct {
 
 	// Aggregated failure analysis.
 	FailureDistribution map[string]int `json:"failure_distribution,omitempty"`
+
+	// RecurringKind is set by Patterns() when the dominant failure kind
+	// is also dominant in the previous run. Used for stubborn detection
+	// across 3+ runs. Not serialized to JSON.
+	RecurringKind string `json:"-"`
 }
 
 // TaskResult captures a single task's outcome for the iteration log.
