@@ -146,17 +146,49 @@ class ErgateAgent(BaseAgent):
         self.logger.info(f"Uploading ergate binary from {binary_path}")
 
         # Install ca-certificates for TLS (fixes x509 errors on minimal containers).
-        # Best-effort: apt mirrors are slow behind GFW. If it fails or times
-        # out, setup continues — most containers already have ca-certificates.
+        # Some Terminal-Bench images lack them, causing "tls: failed to verify
+        # certificate" when ergate calls the LLM API. Check first, install only
+        # if needed. Use proxy to speed up apt behind GFW.
+        has_certs = False
         try:
+            result = await environment.exec(
+                "dpkg -l ca-certificates 2>/dev/null | grep -q '^ii' && echo 'INSTALLED' || echo 'MISSING'",
+                timeout_sec=10,
+            )
+            has_certs = "INSTALLED" in (result.stdout or "")
+        except Exception:
+            pass
+
+        if has_certs:
+            self.logger.info("ca-certificates already installed")
+        else:
+            self.logger.info("ca-certificates missing — installing via apt")
             await environment.exec(
-                "apt-get update -o Acquire::http::Timeout=5 -qq "
-                "&& apt-get install -y -qq --no-install-recommends ca-certificates 2>/dev/null",
-                timeout_sec=30,
+                "apt-get update -o Acquire::http::Timeout=10 -qq "
+                "&& apt-get install -y -qq --no-install-recommends ca-certificates",
+                timeout_sec=120,
                 env=setup_proxy_env if setup_proxy_env else None,
             )
+            self.logger.info("ca-certificates installed")
+
+        # Pre-install uv (Python package manager) — many Terminal-Bench
+        # verifiers use `uvx` which downloads uv from GitHub on first use.
+        # GitHub release assets are blocked by GFW, so pre-installing avoids
+        # "SSL_ERROR_SYSCALL" / "failed to download uv" failures in test.sh.
+        try:
+            await environment.exec(
+                "curl -LsSf https://astral.sh/uv/install.sh | sh 2>/dev/null || true",
+                timeout_sec=60,
+                env=setup_proxy_env if setup_proxy_env else None,
+            )
+            await environment.exec(
+                "cp $HOME/.local/bin/uv /usr/local/bin/ 2>/dev/null; "
+                "cp $HOME/.local/bin/uvx /usr/local/bin/ 2>/dev/null; "
+                "echo 'uv pre-installed'",
+                timeout_sec=10,
+            )
         except Exception:
-            self.logger.info("ca-certificates install skipped (timeout or mirror unreachable)")
+            self.logger.info("uv pre-install skipped")
 
         await environment.upload_file(binary_path, f"/tmp/{AGENT_BINARY}")
         await environment.exec(
