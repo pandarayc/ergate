@@ -165,11 +165,12 @@ class ErgateAgent(BaseAgent):
             self.logger.info("ca-certificates missing — installing via apt")
             await environment.exec(
                 "apt-get update -o Acquire::http::Timeout=10 -qq "
-                "&& apt-get install -y -qq --no-install-recommends ca-certificates",
+                "&& apt-get install -y -qq --no-install-recommends ca-certificates "
+                "&& update-ca-certificates",
                 timeout_sec=120,
                 env=setup_proxy_env if setup_proxy_env else None,
             )
-            self.logger.info("ca-certificates installed")
+            self.logger.info("ca-certificates installed and updated")
 
         # Pre-install uv (Python package manager) — many Terminal-Bench
         # verifiers use `uvx` which downloads uv from GitHub on first use.
