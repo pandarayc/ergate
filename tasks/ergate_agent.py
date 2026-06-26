@@ -113,13 +113,26 @@ class ErgateAgent(BaseAgent):
                 f"go build -o tasks/{AGENT_BINARY} ./cmd/ergate/"
             )
 
+        # Build proxy env for setup commands (apt-get etc.).
+        setup_proxy_env: dict[str, str] = {}
+        for key in _PROXY_ENV_VARS:
+            if key in self.extra_env:
+                setup_proxy_env[key] = self.extra_env[key]
+
         self.logger.info(f"Uploading ergate binary from {binary_path}")
 
         # Install ca-certificates for TLS (fixes x509 errors on minimal containers).
-        await environment.exec(
-            "apt-get update -qq && apt-get install -y -qq ca-certificates 2>/dev/null || true",
-            timeout_sec=60,
-        )
+        # Best-effort: apt mirrors are slow behind GFW. If it fails or times
+        # out, setup continues — most containers already have ca-certificates.
+        try:
+            await environment.exec(
+                "apt-get update -o Acquire::http::Timeout=5 -qq "
+                "&& apt-get install -y -qq --no-install-recommends ca-certificates 2>/dev/null",
+                timeout_sec=30,
+                env=setup_proxy_env if setup_proxy_env else None,
+            )
+        except Exception:
+            self.logger.info("ca-certificates install skipped (timeout or mirror unreachable)")
 
         await environment.upload_file(binary_path, f"/tmp/{AGENT_BINARY}")
         await environment.exec(
