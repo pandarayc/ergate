@@ -81,7 +81,7 @@ func runBench(cmd *cobra.Command, args []string) error {
 
 	todoMgr := tool.NewTodoManager()
 	reg := tool.NewRegistry()
-	tool.RegisterLocalTools(reg, todoMgr)
+	tool.RegisterBuiltins(reg, todoMgr)
 
 	// Determine bench dir from first task.
 	benchDir := filepath.Dir(args[0])

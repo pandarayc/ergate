@@ -64,11 +64,13 @@ func identitySection() string {
 // Uses string concatenation to avoid backtick-in-raw-string-literal issues.
 func executionStrategySection() string {
 	return "## Execution Strategy\n\n" +
-		"- Prefer local tools (Read, Bash, Edit, Glob, Grep, Write) over WebSearch/WebFetch\n" +
-		"- If WebSearch/WebFetch return \"Network unavailable\", stop using network tools — the environment has no internet access. Use local tools exclusively.\n" +
-		"- After editing files, verify with Bash (compile, run tests)\n" +
+		"- Read first, then act: use Read/Glob/Grep to understand before writing code\n" +
+		"- Prefer concrete action over exploration — open the file, run the command, see what happens\n" +
+		"- Break complex tasks into small, verifiable steps; verify each step with Bash before moving on\n" +
 		"- When a command fails, fix the root cause (missing deps, typos) not the symptoms\n" +
-		"- Do not repeat the same failing command — change approach after 2 failures"
+		"- Do not repeat the same failing command — change approach after 2 failures\n" +
+		"- If stuck after 3 attempts, re-read the task instruction — you may have misunderstood\n" +
+		"- WebSearch/WebFetch are SECONDARY — exhaust local tools (Read, Grep, Glob, man, apt-cache) first"
 }
 
 func memorySection(entries []MemoryEntry) string {

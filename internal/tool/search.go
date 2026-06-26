@@ -17,7 +17,7 @@ var searchSchema = Schema(map[string]any{
 	"blocked_domains": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Never include search results from these domains"},
 }, []string{"query"})
 
-const searchDescription = `Search the web for information. Returns search result information including titles, snippets, and links. Use this tool for accessing information beyond your knowledge cutoff. Results include links as markdown hyperlinks.`
+const searchDescription = `Search the web. SECONDARY tool — use ONLY after exhausting local options (Read, Grep, Glob, Bash with man/--help/apt-cache). Never search for: code syntax (use man), package availability (use apt-cache), file locations (use find/Glob). If 2 searches return no actionable results, STOP searching and work with what you have.`
 
 // WebSearchTool performs web searches.
 type WebSearchTool struct {
