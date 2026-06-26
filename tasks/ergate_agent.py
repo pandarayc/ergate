@@ -217,12 +217,11 @@ class ErgateAgent(BaseAgent):
             " --headless -p " + shlex.quote(instruction)
         )
 
-        # Build env dict: forward proxy vars so WebFetch/WebSearch can use them.
-        # Go's net/http reads HTTP_PROXY/HTTPS_PROXY/NO_PROXY automatically.
+        # Do NOT pass proxy env vars to ergate process — the Go net/http
+        # client would route ALL requests (including LLM API calls) through
+        # the proxy, adding latency per turn. Container-level proxy (apt
+        # config + /etc/environment) already handles verifier dependencies.
         run_env: dict[str, str] = {}
-        for key in _PROXY_ENV_VARS:
-            if key in self.extra_env:
-                run_env[key] = self.extra_env[key]
 
         self.logger.info(
             f"Running ergate (model={self.extra_env.get('ERGATE_MODEL', 'default')}, "
