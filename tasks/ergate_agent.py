@@ -172,6 +172,20 @@ class ErgateAgent(BaseAgent):
             )
             self.logger.info("ca-certificates installed and updated")
 
+        # Warm the apt cache NOW so the verifier (test.sh) doesn't have to
+        # download 8.7MB of package indexes through the proxy at test time.
+        # This is the single biggest source of verifier slowness — multiple
+        # containers downloading Packages.gz concurrently behind GFW.
+        try:
+            await environment.exec(
+                "apt-get update -o Acquire::http::Timeout=30 -qq",
+                timeout_sec=180,
+                env=setup_proxy_env if setup_proxy_env else None,
+            )
+            self.logger.info("apt cache warmed")
+        except Exception:
+            self.logger.warning("apt cache warm skipped")
+
         # Pre-install uv (Python package manager) — many Terminal-Bench
         # verifiers use `uvx` which downloads uv from GitHub on first use.
         # GitHub release assets are blocked by GFW, so pre-installing avoids
