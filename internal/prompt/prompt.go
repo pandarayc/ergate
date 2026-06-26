@@ -64,9 +64,10 @@ func identitySection() string {
 // Uses string concatenation to avoid backtick-in-raw-string-literal issues.
 func executionStrategySection() string {
 	return "## Execution Strategy\n\n" +
-		"- Read first, then act: use Read/Glob/Grep to understand before writing code\n" +
-		"- Prefer concrete action over exploration — open the file, run the command, see what happens\n" +
-		"- Break complex tasks into small, verifiable steps; verify each step with Bash before moving on\n" +
+		"- Read first, then act: use Read/Glob/Grep to understand the task before doing anything\n" +
+		"- For code tasks, WRITE COMPLETE FILES FIRST using Write/Edit — do NOT try to solve problems with bash one-liners\n" +
+		"- Test only after writing code: write → compile → fix errors → repeat. Do not run Bash commands that should be in source files\n" +
+		"- Break complex tasks into small, verifiable steps; verify each step before moving on\n" +
 		"- When a command fails, fix the root cause (missing deps, typos) not the symptoms\n" +
 		"- Do not repeat the same failing command — change approach after 2 failures\n" +
 		"- If stuck after 3 attempts, re-read the task instruction — you may have misunderstood\n" +
