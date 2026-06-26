@@ -3,9 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -74,7 +77,7 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage, execC
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return &ToolResult{Success: false, Content: fmt.Sprintf("Fetch failed: %v", err)}, nil
+		return &ToolResult{Success: false, Content: classifyNetworkError(err)}, nil
 	}
 	defer resp.Body.Close()
 
@@ -106,6 +109,54 @@ func (t *WebFetchTool) Execute(ctx context.Context, input json.RawMessage, execC
 			"prompt":     in.Prompt,
 		},
 	}, nil
+}
+
+// classifyNetworkError distinguishes between "network is down" (model should
+// stop trying) and other errors. The message guides the model toward using
+// local tools instead of retrying failed HTTP requests.
+func classifyNetworkError(err error) string {
+	// Unwrap url.Error — the standard wrapper for HTTP transport errors.
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return "Network unavailable: connection timed out. Do not retry — use local tools (Read, Bash, Glob, Grep) instead."
+		}
+
+		// DNS resolution failures.
+		var dnsErr *net.DNSError
+		if errors.As(opErr.Err, &dnsErr) {
+			return fmt.Sprintf("Network unavailable: DNS resolution failed for %q. Do not retry — use local tools instead.", dnsErr.Name)
+		}
+		if errors.As(err, &dnsErr) {
+			return fmt.Sprintf("Network unavailable: DNS resolution failed for %q. Do not retry — use local tools instead.", dnsErr.Name)
+		}
+
+		msg := opErr.Err.Error()
+		switch {
+		case strings.Contains(msg, "connection refused"):
+			return "Network unavailable: connection refused. Do not retry — use local tools instead."
+		case strings.Contains(msg, "no route to host"):
+			return "Network unavailable: no route to host. Do not retry — use local tools instead."
+		case strings.Contains(msg, "network is unreachable"):
+			return "Network unavailable: network is unreachable. Do not retry — use local tools instead."
+		}
+	}
+
+	// TLS / certificate errors.
+	msg := err.Error()
+	if strings.Contains(msg, "tls:") || strings.Contains(msg, "x509:") {
+		return "Network unavailable: TLS handshake failed. Do not retry — use local tools instead."
+	}
+	if strings.Contains(msg, "no such host") {
+		return "Network unavailable: host not found. Do not retry — use local tools instead."
+	}
+
+	return fmt.Sprintf("Network error: %v", err)
 }
 
 // stripHTML removes common HTML tags for cleaner text extraction.

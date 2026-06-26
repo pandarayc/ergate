@@ -65,6 +65,7 @@ func identitySection() string {
 func executionStrategySection() string {
 	return "## Execution Strategy\n\n" +
 		"- Prefer local tools (Read, Bash, Edit, Glob, Grep, Write) over WebSearch/WebFetch\n" +
+		"- If WebSearch/WebFetch return \"Network unavailable\", stop using network tools — the environment has no internet access. Use local tools exclusively.\n" +
 		"- After editing files, verify with Bash (compile, run tests)\n" +
 		"- When a command fails, fix the root cause (missing deps, typos) not the symptoms\n" +
 		"- Do not repeat the same failing command — change approach after 2 failures"

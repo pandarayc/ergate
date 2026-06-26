@@ -20,6 +20,20 @@ Or just forward all existing env vars:
         --ae ERGATE_MODEL=deepseek-v4-pro \\
         --ae ERGATE_MAX_TURNS=25 \\
         -d terminal-bench/terminal-bench-2 -l 3
+
+Proxy support (for GFW / restricted networks):
+
+    harbor run \\
+        --agent-import-path tasks.ergate_agent:ErgateAgent \\
+        --ae HTTP_PROXY=http://host.docker.internal:7897 \\
+        --ae HTTPS_PROXY=http://host.docker.internal:7897 \\
+        --ae NO_PROXY=localhost,127.0.0.1 \\
+        ... other env vars \\
+        -d terminal-bench/terminal-bench-2 -l 3
+
+Proxy vars (HTTP_PROXY, HTTPS_PROXY, NO_PROXY) are injected into the
+container environment so ergate's WebFetch/WebSearch tools can route
+HTTP requests through the proxy. Go's net/http reads them automatically.
 """
 
 import asyncio
@@ -35,6 +49,12 @@ from harbor.models.agent.context import AgentContext
 
 AGENT_BINARY = "ergate-static"
 EREGATE_CONFIG_DIR = "/home/agent/.ergate"
+
+# Proxy env var names that are forwarded to the container environment.
+_PROXY_ENV_VARS = (
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "no_proxy",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,10 +180,19 @@ class ErgateAgent(BaseAgent):
             " --headless -p " + shlex.quote(instruction)
         )
 
+        # Build env dict: forward proxy vars so WebFetch/WebSearch can use them.
+        # Go's net/http reads HTTP_PROXY/HTTPS_PROXY/NO_PROXY automatically.
+        run_env: dict[str, str] = {}
+        for key in _PROXY_ENV_VARS:
+            if key in self.extra_env:
+                run_env[key] = self.extra_env[key]
+
         self.logger.info(
             f"Running ergate (model={self.extra_env.get('ERGATE_MODEL', 'default')}, "
             f"max_turns={self.max_turns})"
         )
+        if run_env:
+            self.logger.info(f"Proxy: {run_env.get('HTTP_PROXY', run_env.get('http_proxy', 'none'))}")
         self.logger.info(f"Instruction: {instruction[:120]}...")
 
         collected: list[str] = []
@@ -177,6 +206,7 @@ class ErgateAgent(BaseAgent):
             with environment.scoped_output_callback(on_output):
                 result = await environment.exec(
                     cmd,
+                    env=run_env if run_env else None,
                     timeout_sec=1200,
                 )
         except asyncio.TimeoutError:

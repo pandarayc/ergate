@@ -56,7 +56,7 @@ func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage, exec
 	// Use DuckDuckGo's HTML search (no API key needed)
 	results, err := duckDuckGoSearch(ctx, in.Query)
 	if err != nil {
-		return &ToolResult{Success: false, Content: fmt.Sprintf("Search failed: %v", err)}, nil
+		return &ToolResult{Success: false, Content: classifyNetworkError(err)}, nil
 	}
 
 	// Filter by allowed/blocked domains
