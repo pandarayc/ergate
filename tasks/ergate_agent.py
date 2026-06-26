@@ -243,6 +243,9 @@ class ErgateAgent(BaseAgent):
             compat: {compat}
             base_url: "{base_url}"
             api_key: "{api_key}"
+            models:
+              "{model}":
+                thinking_budget: 4000
         """)
 
         await environment.exec(f"mkdir -p {EREGATE_CONFIG_DIR}")
