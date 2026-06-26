@@ -172,17 +172,20 @@ class ErgateAgent(BaseAgent):
             )
             self.logger.info("ca-certificates installed and updated")
 
-        # Warm the apt cache NOW so the verifier (test.sh) doesn't have to
-        # download 8.7MB of package indexes through the proxy at test time.
-        # This is the single biggest source of verifier slowness — multiple
-        # containers downloading Packages.gz concurrently behind GFW.
+        # Warm the apt cache and pre-install packages that ALL verifiers need.
+        # This prevents 5+ containers from concurrently downloading 8.7MB of
+        # package indexes + curl/pkg through the proxy at test time.
+        # curl: used by every test.sh to download uv. Pre-installing makes
+        #       verifier's `apt-get install curl` a no-op.
         try:
             await environment.exec(
-                "apt-get update -o Acquire::http::Timeout=30 -qq",
+                "apt-get update -o Acquire::http::Timeout=30 -qq "
+                "&& apt-get install -y -qq --no-install-recommends curl ca-certificates 2>/dev/null "
+                "&& apt-get clean",
                 timeout_sec=180,
                 env=setup_proxy_env if setup_proxy_env else None,
             )
-            self.logger.info("apt cache warmed")
+            self.logger.info("apt cache warmed + curl pre-installed")
         except Exception:
             self.logger.warning("apt cache warm skipped")
 

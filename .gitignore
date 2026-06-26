@@ -49,3 +49,4 @@ config.yaml
 cache_stats.log
 jobs/
 __pycache__/
+tasks/ergate-static
