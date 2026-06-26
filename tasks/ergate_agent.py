@@ -119,6 +119,30 @@ class ErgateAgent(BaseAgent):
             if key in self.extra_env:
                 setup_proxy_env[key] = self.extra_env[key]
 
+        # Inject proxy at container level so ALL processes benefit:
+        # - apt-get (via /etc/apt/apt.conf.d)
+        # - curl/wget (via /etc/environment)
+        # - verifier test.sh (inherits from /etc/environment)
+        if setup_proxy_env:
+            proxy_url = setup_proxy_env.get("HTTPS_PROXY") or setup_proxy_env.get("https_proxy") or ""
+            if proxy_url:
+                try:
+                    await environment.exec(
+                        f"mkdir -p /etc/apt/apt.conf.d && "
+                        f"echo 'Acquire::http::Proxy \"{proxy_url}\";' > /etc/apt/apt.conf.d/01proxy && "
+                        f"echo 'Acquire::https::Proxy \"{proxy_url}\";' >> /etc/apt/apt.conf.d/01proxy",
+                        timeout_sec=10,
+                    )
+                    self.logger.info(f"Container-level proxy configured: {proxy_url}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to configure container proxy: {e}")
+            # Also set in /etc/environment for non-apt tools
+            try:
+                env_lines = " ".join(f'echo "{k}={v}" >> /etc/environment' for k, v in setup_proxy_env.items())
+                await environment.exec(env_lines, timeout_sec=10)
+            except Exception:
+                pass
+
         self.logger.info(f"Uploading ergate binary from {binary_path}")
 
         # Install ca-certificates for TLS (fixes x509 errors on minimal containers).
