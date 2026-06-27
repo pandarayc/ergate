@@ -245,7 +245,7 @@ class ErgateAgent(BaseAgent):
             api_key: "{api_key}"
             models:
               "{model}":
-                thinking_budget: 4000
+                thinking_budget: 8000
         """)
 
         await environment.exec(f"mkdir -p {EREGATE_CONFIG_DIR}")
