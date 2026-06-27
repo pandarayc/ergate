@@ -222,6 +222,7 @@ class ErgateAgent(BaseAgent):
         api_provider = ergate_env.get("ERGATE_API_PROVIDER", "anthropic")
         base_url = ergate_env.get("ERGATE_BASE_URL", "https://api.deepseek.com/anthropic")
         compat = ergate_env.get("ERGATE_COMPAT", "anthropic")  # API protocol: anthropic|openai
+        thinking_budget = ergate_env.get("ERGATE_THINKING_BUDGET", "8000")
         max_turns = ergate_env.get("ERGATE_MAX_TURNS", str(self.max_turns))
 
         self.logger.info(
@@ -245,7 +246,7 @@ class ErgateAgent(BaseAgent):
             api_key: "{api_key}"
             models:
               "{model}":
-                thinking_budget: 8000
+                thinking_budget: {thinking_budget}
         """)
 
         await environment.exec(f"mkdir -p {EREGATE_CONFIG_DIR}")
