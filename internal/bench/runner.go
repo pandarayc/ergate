@@ -134,7 +134,7 @@ func (r *Runner) createEngine(workDir, sessionDir, transcriptDir string) *engine
 	cwd, _ := os.Getwd()
 	sessionSvc, _ := session.NewFileService(sessionDir)
 	ectx := engine.Context{
-		Skills: skill.NewRegistry(), Hooks: hooks.NewManager(),
+		Skills: skill.NewRegistry(), Hooks: benchmarkHooks(),
 		FileTracker: filehistory.NewTracker(cwd), PlanMgr: planmode.NewManager(),
 		TranscriptDir: transcriptDir, SessionService: sessionSvc,
 		PermMgr: tool.NewPermissionManager("bypass", nil),
@@ -198,4 +198,10 @@ func loadLatestSessionFile(dir string) *session.Session {
 		return nil
 	}
 	return &sess
+}
+
+func benchmarkHooks() *hooks.Manager {
+	m := hooks.NewManager()
+	m.Register(hooks.NewPhaseEnforcer(3))
+	return m
 }
