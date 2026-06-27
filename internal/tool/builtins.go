@@ -18,4 +18,5 @@ func RegisterLocalTools(reg *Registry, todo *TodoManager) {
 	reg.Register(NewGlobTool())
 	reg.Register(NewToolSearchTool(reg))
 	reg.Register(NewTodoWriteTool(todo))
+	reg.Register(NewEvaluateTool())
 }

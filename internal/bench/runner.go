@@ -146,7 +146,18 @@ func (r *Runner) createEngine(workDir, sessionDir, transcriptDir string) *engine
 		},
 	}
 	_ = workDir
-	return engine.New(r.cfg, r.client, r.registry, ectx)
+	eng := engine.New(r.cfg, r.client, r.registry, ectx)
+	if t, ok := r.registry.Get("Evaluate"); ok {
+		if et, ok := t.(*tool.EvaluateTool); ok {
+			et.SetRunSubAgent(func(ctx context.Context, prompt, model string, maxTurns int) string {
+				events := make(chan engine.Event, 64)
+				go func() { for range events {} }()
+				_ = eng.RunSubAgent(ctx, prompt, model, maxTurns, events)
+				return ""
+			})
+		}
+	}
+	return eng
 }
 
 func (r *Runner) runTest(testCmd, workDir string) (bool, string, int) {
