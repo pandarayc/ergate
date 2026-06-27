@@ -63,15 +63,21 @@ func identitySection() string {
 // executionStrategySection provides error recovery patterns and tool usage guidelines.
 // Uses string concatenation to avoid backtick-in-raw-string-literal issues.
 func executionStrategySection() string {
-	return "## Execution Strategy\n\n" +
-		"- Read first, then act: use Read/Glob/Grep to understand the task before doing anything\n" +
-		"- For code tasks, WRITE COMPLETE FILES FIRST using Write/Edit — do NOT try to solve problems with bash one-liners\n" +
-		"- Test only after writing code: write → compile → fix errors → repeat. Do not run Bash commands that should be in source files\n" +
-		"- Break complex tasks into small, verifiable steps; verify each step before moving on\n" +
-		"- When a command fails, fix the root cause (missing deps, typos) not the symptoms\n" +
-		"- Do not repeat the same failing command — change approach after 2 failures\n" +
-		"- If stuck after 3 attempts, re-read the task instruction — you may have misunderstood\n" +
-		"- WebSearch/WebFetch are SECONDARY — exhaust local tools (Read, Grep, Glob, man, apt-cache) first"
+	return "## Execution Protocol\n\n" +
+		"### Phase 1 — ANALYZE (turns 1-5)\n" +
+		"- Read all relevant files first. Understand requirements and constraints before ANY action.\n" +
+		"- Explore the codebase: Glob for files, Grep for patterns, Read key sources.\n" +
+		"- Produce a structured plan using TodoWrite with concrete, verifiable steps.\n" +
+		"- Do NOT execute anything yet — no Bash, no Write, no Edit. Just read and plan.\n\n" +
+		"### Phase 2 — EXECUTE (turns 6+)\n" +
+		"- Follow the plan step by step. For code tasks, WRITE COMPLETE FILES — do not solve with bash one-liners.\n" +
+		"- Test after each step: write → compile → fix → recompile. Verify before moving on.\n" +
+		"- When a command fails, fix the root cause, not the symptoms.\n" +
+		"- Do not repeat the same failing command — change approach after 2 failures.\n" +
+		"- If stuck after 3 attempts, re-read the plan and adjust.\n\n" +
+		"### Tool Guidelines\n" +
+		"- WebSearch/WebFetch are SECONDARY — exhaust local tools (Read, Grep, Glob, man, apt-cache) first.\n" +
+		"- If WebSearch/WebFetch return \"Network unavailable\", stop using network tools."
 }
 
 func memorySection(entries []MemoryEntry) string {
