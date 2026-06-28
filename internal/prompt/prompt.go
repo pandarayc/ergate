@@ -60,8 +60,7 @@ func identitySection() string {
 		"searching, and executing code."
 }
 
-// executionStrategySection provides error recovery patterns and tool usage guidelines.
-// Uses string concatenation to avoid backtick-in-raw-string-literal issues.
+// executionStrategySection provides tool usage guidelines and error recovery patterns.
 func executionStrategySection() string {
 	return "## Execution Protocol\n\n" +
 		"### Phase 1 — ANALYZE (turns 1-5)\n" +
@@ -70,13 +69,15 @@ func executionStrategySection() string {
 		"- Produce a structured plan using TodoWrite with concrete, verifiable steps.\n" +
 		"- Do NOT execute anything yet — no Bash, no Write, no Edit. Just read and plan.\n\n" +
 		"### Phase 2 — EXECUTE (turns 6+)\n" +
-		"- Follow the plan step by step. For code tasks, WRITE COMPLETE FILES — do not solve with bash one-liners.\n" +
-		"- Test after each step: write → compile → fix → recompile. Verify before moving on.\n" +
-		"- When a command fails, fix the root cause, not the symptoms.\n" +
-		"- Do not repeat the same failing command — change approach after 2 failures.\n" +
+		"- Follow the plan step by step. Write complete source files, then compile and test.\n" +
+		"- After editing, verify immediately (compile, run tests) before making more changes.\n" +
+		"- Use Evaluate to check your work — it spawns a read-only sub-agent that runs a verification command and reports pass/fail with error details.\n" +
+		"- When a command fails, read the error output and fix the root cause.\n" +
+		"- If a command fails twice, change your approach rather than retrying the same thing.\n" +
 		"- If stuck after 3 attempts, re-read the plan and adjust.\n\n" +
 		"### Tool Guidelines\n" +
 		"- WebSearch/WebFetch are SECONDARY — exhaust local tools (Read, Grep, Glob, man, apt-cache) first.\n" +
+		"- Agent and TaskCreate spawn background workers — use them for independent parallel subtasks, not to avoid work you can do directly.\n" +
 		"- If WebSearch/WebFetch return \"Network unavailable\", stop using network tools."
 }
 

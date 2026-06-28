@@ -1,15 +1,9 @@
 package tool
 
 // RegisterBuiltins registers all built-in tools with the registry.
+// All tools are available in every mode (TUI, headless, bench) —
+// Ergate does not maintain separate tool sets for different environments.
 func RegisterBuiltins(reg *Registry, todo *TodoManager) {
-	RegisterLocalTools(reg, todo)
-	reg.Register(NewWebFetchTool())
-	reg.Register(NewWebSearchTool())
-}
-
-// RegisterLocalTools registers only local filesystem tools (no WebFetch/WebSearch).
-// Use this for offline/benchmark environments where network tools waste turns.
-func RegisterLocalTools(reg *Registry, todo *TodoManager) {
 	reg.Register(NewBashTool())
 	reg.Register(NewReadTool())
 	reg.Register(NewWriteTool())
@@ -19,4 +13,6 @@ func RegisterLocalTools(reg *Registry, todo *TodoManager) {
 	reg.Register(NewToolSearchTool(reg))
 	reg.Register(NewTodoWriteTool(todo))
 	reg.Register(NewEvaluateTool())
+	reg.Register(NewWebFetchTool())
+	reg.Register(NewWebSearchTool())
 }
