@@ -15,7 +15,7 @@ var readSchema = Schema(map[string]any{
 	"limit":     map[string]any{"type": "integer", "description": "Maximum number of lines to read"},
 }, []string{"file_path"})
 
-const readDescription = `Read a file from the local filesystem. Returns the file content with line numbers. Supports reading specific line ranges with offset and limit parameters. Supports text files and displays images (PNG, JPG).`
+const readDescription = `Read a file from the local filesystem. PRIMARY tool for understanding code — use BEFORE editing any file you haven't read this session. Returns the file content with line numbers. Supports reading specific line ranges with offset and limit parameters. Supports text files and displays images (PNG, JPG).`
 
 // ReadTool reads file contents.
 type ReadTool struct {

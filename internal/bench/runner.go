@@ -151,9 +151,23 @@ func (r *Runner) createEngine(workDir, sessionDir, transcriptDir string) *engine
 		if et, ok := t.(*tool.EvaluateTool); ok {
 			et.SetRunSubAgent(func(ctx context.Context, prompt, model string, maxTurns int) string {
 				events := make(chan engine.Event, 64)
-				go func() { for range events {} }()
-				_ = eng.RunSubAgent(ctx, prompt, model, maxTurns, events)
-				return ""
+				var result strings.Builder
+				go func() {
+					_ = eng.RunSubAgent(ctx, prompt, model, maxTurns, events)
+				}()
+				for event := range events {
+					if event.Type == engine.EventText {
+						if text, ok := event.Data.(string); ok {
+							result.WriteString(text)
+						}
+					}
+					if event.Type == engine.EventDone {
+						if text, ok := event.Data.(string); ok && text != "" {
+							result.WriteString(text)
+						}
+					}
+				}
+				return result.String()
 			})
 		}
 	}

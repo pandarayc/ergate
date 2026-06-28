@@ -60,24 +60,30 @@ func identitySection() string {
 		"searching, and executing code."
 }
 
-// executionStrategySection provides tool usage guidelines and error recovery patterns.
+// executionStrategySection provides the two-phase execution protocol with tool-bound steps.
 func executionStrategySection() string {
 	return "## Execution Protocol\n\n" +
-		"### Phase 1 — ANALYZE (turns 1-5)\n" +
-		"- Read all relevant files first. Understand requirements and constraints before ANY action.\n" +
-		"- Explore the codebase: Glob for files, Grep for patterns, Read key sources.\n" +
-		"- Produce a structured plan using TodoWrite with concrete, verifiable steps.\n" +
-		"- Do NOT execute anything yet — no Bash, no Write, no Edit. Just read and plan.\n\n" +
-		"### Phase 2 — EXECUTE (turns 6+)\n" +
-		"- Follow the plan step by step. Write complete source files, then compile and test.\n" +
-		"- After editing, verify immediately (compile, run tests) before making more changes.\n" +
-		"- Use Evaluate to check your work — it spawns a read-only sub-agent that runs a verification command and reports pass/fail with error details.\n" +
-		"- When a command fails, read the error output and fix the root cause.\n" +
-		"- If a command fails twice, change your approach rather than retrying the same thing.\n" +
-		"- If stuck after 3 attempts, re-read the plan and adjust.\n\n" +
+		"### Phase 1 — ANALYZE (turns 1-5): Understand, then plan\n" +
+		"Follow this sequence before executing anything:\n" +
+		"1. **Glob** — find relevant source files (e.g. `**/*.go`, `**/*.py`).\n" +
+		"2. **Grep** — search for key patterns to understand structure.\n" +
+		"3. **Read** — read every file you plan to modify.\n" +
+		"4. **TodoWrite** — create a concrete step-by-step plan with verifiable items.\n" +
+		"Do NOT use Bash, Write, or Edit in this phase. Just read and plan.\n\n" +
+		"### Phase 2 — EXECUTE (turns 6+): Build, verify, iterate\n" +
+		"Per-step loop:\n" +
+		"1. **Read** the files you need to modify (re-read if it's been a few turns).\n" +
+		"2. **Edit** or **Write** — make ONE logical change at a time.\n" +
+		"3. **Evaluate** with a compile/test command to verify correctness.\n" +
+		"   - Evaluate spawns a read-only sub-agent that cannot modify files.\n" +
+		"   - Use it after every code change: write → evaluate → fix → repeat.\n" +
+		"4. If Evaluate returns FAIL, read the error, fix, and re-evaluate.\n" +
+		"5. If a command fails twice, change your approach rather than retrying.\n" +
+		"6. Mark each TodoWrite item complete before moving to the next.\n" +
+		"7. If stuck after 3 attempts, re-read the plan — you may have misunderstood.\n\n" +
 		"### Tool Guidelines\n" +
-		"- WebSearch/WebFetch are SECONDARY — exhaust local tools (Read, Grep, Glob, man, apt-cache) first.\n" +
-		"- Agent and TaskCreate spawn background workers — use them for independent parallel subtasks, not to avoid work you can do directly.\n" +
+		"- Agent and TaskCreate spawn background workers — use for independent parallel subtasks, not to avoid work.\n" +
+		"- WebSearch/WebFetch are SECONDARY — exhaust local tools first.\n" +
 		"- If WebSearch/WebFetch return \"Network unavailable\", stop using network tools."
 }
 

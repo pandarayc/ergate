@@ -17,7 +17,7 @@ var bashSchema = Schema(map[string]any{
 	"timeout":     map[string]any{"type": "number", "description": "Timeout in milliseconds (default 120000)"},
 }, []string{"command"})
 
-const bashDescription = `Execute a bash command in the terminal. Use for running tests, building projects, installing dependencies, git operations, file system operations, and other shell commands. Returns stdout and stderr output with exit code.`
+const bashDescription = `Execute a bash command in the terminal. Use for running tests, building projects, installing dependencies, and git operations. Returns stdout and stderr output with exit code. Do NOT use for reading files (use Read), searching file contents (use Grep), finding files (use Glob), or writing/editing files (use Write/Edit) — the dedicated tools return structured results with better safety checks.`
 
 // BashTool executes shell commands.
 type BashTool struct {
