@@ -35,13 +35,14 @@ type AnthropicClient struct {
 
 // NewAnthropicClient creates a new Anthropic API client.
 func NewAnthropicClient(apiKey, baseURL string) *AnthropicClient {
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &AnthropicClient{
 		apiKey:  apiKey,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute,
 		},
-		adapter: AnthropicAdapter{},
+		adapter: AnthropicAdapter{BaseURL: baseURL},
 	}
 }
 

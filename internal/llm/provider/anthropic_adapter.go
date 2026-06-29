@@ -14,9 +14,13 @@ import (
 const anthropicVersion = "2023-06-01"
 
 // AnthropicAdapter implements llm.ProviderAdapter for the Anthropic Messages API.
-type AnthropicAdapter struct{}
+// Also serves as the adapter for DeepSeek's Anthropic-compatible endpoint.
+type AnthropicAdapter struct {
+	// BaseURL is used to detect DeepSeek vs real Anthropic for thinking params.
+	BaseURL string
+}
 
-func (AnthropicAdapter) BuildRequestBody(req *llm.ChatRequest) map[string]interface{} {
+func (a AnthropicAdapter) BuildRequestBody(req *llm.ChatRequest) map[string]interface{} {
 	apiReq := map[string]interface{}{
 		"model":      req.Model,
 		"max_tokens": req.MaxTokens,
@@ -30,8 +34,11 @@ func (AnthropicAdapter) BuildRequestBody(req *llm.ChatRequest) map[string]interf
 		apiReq["system"] = anthropicSystemPrompt(req.System)
 	}
 
-	// Extended thinking
-	if req.ThinkingBudget > 0 {
+	// Extended thinking: DeepSeek and Anthropic use different parameters.
+	// - Anthropic: {"thinking": {"type": "enabled", "budget_tokens": N}}
+	// - DeepSeek:  thinking is enabled by default; budget_tokens is not supported.
+	//   Simply omit the thinking block — DeepSeek handles effort automatically.
+	if req.ThinkingBudget > 0 && !strings.Contains(a.BaseURL, "deepseek") {
 		apiReq["thinking"] = map[string]interface{}{
 			"type":         "enabled",
 			"budget_tokens": req.ThinkingBudget,
