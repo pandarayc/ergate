@@ -15,7 +15,7 @@ var readSchema = Schema(map[string]any{
 	"limit":     map[string]any{"type": "integer", "description": "Maximum number of lines to read"},
 }, []string{"file_path"})
 
-const readDescription = `Read a file from the local filesystem. PRIMARY tool for understanding code — use BEFORE editing any file you haven't read this session. Returns the file content with line numbers. Supports reading specific line ranges with offset and limit parameters. Supports text files and displays images (PNG, JPG).`
+const readDescription = `Read a file from the local filesystem. Returns a header with file path and line count, then the content with line numbers — more informative than raw cat output. PRIMARY tool for understanding code: use BEFORE editing any file you haven't read this session. Supports reading specific line ranges with offset and limit parameters.`
 
 // ReadTool reads file contents.
 type ReadTool struct {
@@ -110,11 +110,20 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage, execCtx *
 		}
 	}
 
-	// Format output with line numbers
+	// Format output with header + line numbers.
+	// The header visually differentiates Read from raw `cat` output,
+	// making the specialized tool more attractive than Bash for reading files.
 	var output strings.Builder
 	totalLines := end - start
-	lineNumWidth := len(fmt.Sprintf("%d", end))
 
+	// Header: file path + line count
+	rangeInfo := ""
+	if in.Offset > 0 || in.Limit > 0 {
+		rangeInfo = fmt.Sprintf(", lines %d-%d", start+1, end)
+	}
+	fmt.Fprintf(&output, "[Read %s — %d lines%s]\n", path, len(lines), rangeInfo)
+
+	lineNumWidth := len(fmt.Sprintf("%d", end))
 	for i := start; i < end; i++ {
 		fmt.Fprintf(&output, "%*d\t%s\n", lineNumWidth, i+1, lines[i])
 	}
