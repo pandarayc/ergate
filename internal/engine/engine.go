@@ -615,12 +615,8 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			}
 		}
 
-		ok, hookMsg := e.firePreToolHook(ctx, tu)
-		if !ok {
+		if !e.firePreToolHook(ctx, tu) {
 			err := fmt.Errorf("tool blocked by hook")
-			if hookMsg != "" {
-				err = fmt.Errorf("%s", hookMsg)
-			}
 			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
 			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
@@ -669,13 +665,7 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		}
 
-		postHookMsg := e.firePostToolHook(ctx, tu, result, execErr)
-		if postHookMsg != "" {
-			resultBlocks = append(resultBlocks, llm.ContentBlock{
-				Type: "text",
-				Text: postHookMsg,
-			})
-		}
+		e.firePostToolHook(ctx, tu, result, execErr)
 		e.checkSkillTriggers(tu, events, turn)
 	}
 
@@ -829,26 +819,23 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	e.log.Import(messages)
 }
 
-func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) (bool, string) {
+func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) bool {
 	if e.hookMgr == nil || !e.hookMgr.HasHooks() {
-		return true, ""
+		return true
 	}
 	result, err := e.hookMgr.Fire(ctx, hooks.PreToolUse, hooks.Data{
 		ToolName: tu.Name,
 		Input:    tu.Input,
 	})
-	if err != nil {
-		return false, err.Error()
+	if err != nil || !result.Continue {
+		return false
 	}
-	if !result.Continue {
-		return false, result.Message
-	}
-	return true, ""
+	return true
 }
 
-func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, result *tool.ToolResult, execErr error) string {
+func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, result *tool.ToolResult, execErr error) {
 	if e.hookMgr == nil || !e.hookMgr.HasHooks() {
-		return ""
+		return
 	}
 	output := ""
 	isError := false
@@ -860,13 +847,12 @@ func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, resu
 		output = execErr.Error()
 		isError = true
 	}
-	hookResult, _ := e.hookMgr.Fire(ctx, hooks.PostToolUse, hooks.Data{
+	e.hookMgr.Fire(ctx, hooks.PostToolUse, hooks.Data{
 		ToolName: tu.Name,
 		Input:    tu.Input,
 		Output:   output,
 		IsError:  isError,
 	})
-	return hookResult.Message
 }
 
 func (e *Engine) pollTaskNotifications(ctx context.Context, events chan<- Event, turn int) {
