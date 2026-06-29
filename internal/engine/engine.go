@@ -669,7 +669,13 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		}
 
-		e.firePostToolHook(ctx, tu, result, execErr)
+		postHookMsg := e.firePostToolHook(ctx, tu, result, execErr)
+		if postHookMsg != "" {
+			resultBlocks = append(resultBlocks, llm.ContentBlock{
+				Type: "text",
+				Text: postHookMsg,
+			})
+		}
 		e.checkSkillTriggers(tu, events, turn)
 	}
 
@@ -840,9 +846,9 @@ func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) (bool
 	return true, ""
 }
 
-func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, result *tool.ToolResult, execErr error) {
+func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, result *tool.ToolResult, execErr error) string {
 	if e.hookMgr == nil || !e.hookMgr.HasHooks() {
-		return
+		return ""
 	}
 	output := ""
 	isError := false
@@ -854,12 +860,13 @@ func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, resu
 		output = execErr.Error()
 		isError = true
 	}
-	e.hookMgr.Fire(ctx, hooks.PostToolUse, hooks.Data{
+	hookResult, _ := e.hookMgr.Fire(ctx, hooks.PostToolUse, hooks.Data{
 		ToolName: tu.Name,
 		Input:    tu.Input,
 		Output:   output,
 		IsError:  isError,
 	})
+	return hookResult.Message
 }
 
 func (e *Engine) pollTaskNotifications(ctx context.Context, events chan<- Event, turn int) {
