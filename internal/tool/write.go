@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"path/filepath"
 )
 
@@ -13,7 +14,7 @@ var writeSchema = Schema(map[string]any{
 	"content":   map[string]any{"type": "string", "description": "The content to write to the file"},
 }, []string{"file_path", "content"})
 
-const writeDescription = `Write a file to the local filesystem. Creates a new file or overwrites an existing one with the provided content. The file path must be absolute. Parent directories are created automatically.`
+const writeDescription = `Write a file to the local filesystem. Returns path, line count, and first-line preview — clearer than cat heredoc output. Use for creating or overwriting files. Parent directories are created automatically.`
 
 // WriteTool writes file contents.
 type WriteTool struct {
@@ -70,13 +71,26 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage, execCtx 
 		return &ToolResult{Success: false, Content: fmt.Sprintf("Failed to write file: %v", err)}, nil
 	}
 
+	lines := countLines(in.Content)
+	firstLine := ""
+	if idx := strings.IndexByte(in.Content, '\n'); idx >= 0 {
+		firstLine = in.Content[:idx]
+	} else if len(in.Content) > 0 {
+		firstLine = in.Content
+	}
+	if len(firstLine) > 80 {
+		firstLine = firstLine[:80] + "..."
+	}
+
 	return &ToolResult{
 		Success: true,
-		Content: fmt.Sprintf("File %s (%d bytes, %d lines)", action, len(in.Content), countLines(in.Content)),
+		Content: fmt.Sprintf("[Write %s — %s: %d lines, %d bytes]\n%s",
+			path, action, lines, len(in.Content), firstLine),
 		Metadata: map[string]any{
 			"file_path": path,
 			"action":    action,
 			"size":      len(in.Content),
+			"lines":     lines,
 		},
 	}, nil
 }
