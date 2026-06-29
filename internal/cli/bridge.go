@@ -75,7 +75,6 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 	}
 
 	hookMgr := hooks.NewManager()
-	hookMgr.Register(hooks.NewPhaseEnforcer(3))
 	hookMgr.Register(hooks.NewToolRedirect())
 	ectx := engine.Context{
 		Skills:        skillReg,
