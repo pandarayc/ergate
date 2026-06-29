@@ -129,7 +129,19 @@ func buildOpenAIRequestBody(req *llm.ChatRequest, opts requestOpts) map[string]i
 }
 
 func (OpenAIAdapter) BuildRequestBody(req *llm.ChatRequest) map[string]interface{} {
-	return buildOpenAIRequestBody(req, requestOpts{})
+	apiReq := buildOpenAIRequestBody(req, requestOpts{})
+
+	// DeepSeek thinking (OpenAI native format).
+	// thinking is enabled by default; explicitly enabling is a no-op but safe.
+	// reasoning_effort is omitted — flash may not support it, and for v4-pro
+	// DeepSeek auto-sets effort=max for complex Agent tasks.
+	if req.ThinkingBudget > 0 {
+		apiReq["thinking"] = map[string]interface{}{
+			"type": "enabled",
+		}
+	}
+
+	return apiReq
 }
 
 func (OpenAIAdapter) ParseErrorResponse(statusCode int, respBody, reqBody []byte) *llm.APIError {

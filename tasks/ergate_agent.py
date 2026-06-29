@@ -219,9 +219,9 @@ class ErgateAgent(BaseAgent):
         ergate_env = dict(self.extra_env)  # copy
         api_key = ergate_env.get("ERGATE_API_KEY", "")
         model = ergate_env.get("ERGATE_MODEL", "deepseek-v4-pro")
-        api_provider = ergate_env.get("ERGATE_API_PROVIDER", "anthropic")
-        base_url = ergate_env.get("ERGATE_BASE_URL", "https://api.deepseek.com/anthropic")
-        compat = ergate_env.get("ERGATE_COMPAT", "anthropic")  # API protocol: anthropic|openai
+        api_provider = ergate_env.get("ERGATE_API_PROVIDER", "deepseek")
+        base_url = ergate_env.get("ERGATE_BASE_URL", "https://api.deepseek.com")
+        compat = ergate_env.get("ERGATE_COMPAT", "openai")  # API protocol: anthropic|openai
         thinking_budget = ergate_env.get("ERGATE_THINKING_BUDGET", "4000")
         max_turns = ergate_env.get("ERGATE_MAX_TURNS", str(self.max_turns))
 
