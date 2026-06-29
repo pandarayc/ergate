@@ -615,8 +615,12 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			}
 		}
 
-		if !e.firePreToolHook(ctx, tu) {
+		ok, hookMsg := e.firePreToolHook(ctx, tu)
+		if !ok {
 			err := fmt.Errorf("tool blocked by hook")
+			if hookMsg != "" {
+				err = fmt.Errorf("%s", hookMsg)
+			}
 			resultBlocks = append(resultBlocks, e.handleToolResult(tu, nil, err))
 			chainItems = append(chainItems, e.makeToolChainItem(tu, nil, err))
 			continue
@@ -819,18 +823,21 @@ func (e *Engine) maybeCompact(ctx context.Context, events chan<- Event, turn int
 	e.log.Import(messages)
 }
 
-func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) bool {
+func (e *Engine) firePreToolHook(ctx context.Context, tu llm.ToolUseBlock) (bool, string) {
 	if e.hookMgr == nil || !e.hookMgr.HasHooks() {
-		return true
+		return true, ""
 	}
 	result, err := e.hookMgr.Fire(ctx, hooks.PreToolUse, hooks.Data{
 		ToolName: tu.Name,
 		Input:    tu.Input,
 	})
-	if err != nil || !result.Continue {
-		return false
+	if err != nil {
+		return false, err.Error()
 	}
-	return true
+	if !result.Continue {
+		return false, result.Message
+	}
+	return true, ""
 }
 
 func (e *Engine) firePostToolHook(ctx context.Context, tu llm.ToolUseBlock, result *tool.ToolResult, execErr error) {

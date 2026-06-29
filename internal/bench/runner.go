@@ -228,5 +228,6 @@ func loadLatestSessionFile(dir string) *session.Session {
 func benchmarkHooks() *hooks.Manager {
 	m := hooks.NewManager()
 	m.Register(hooks.NewPhaseEnforcer(3))
+	m.Register(hooks.NewToolRedirect())
 	return m
 }

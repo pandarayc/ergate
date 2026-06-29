@@ -74,9 +74,12 @@ func CreateEngine(cfg *config.Config, client llm.LLMClient, registry *tool.Regis
 		sessionSvc = nil // non-fatal; session persistence degrades gracefully
 	}
 
+	hookMgr := hooks.NewManager()
+	hookMgr.Register(hooks.NewPhaseEnforcer(3))
+	hookMgr.Register(hooks.NewToolRedirect())
 	ectx := engine.Context{
 		Skills:        skillReg,
-		Hooks:         hooks.NewManager(),
+		Hooks:         hookMgr,
 		FileTracker:   filehistory.NewTracker(cwd),
 		PlanMgr:       planmode.NewManager(),
 		TodoMgr:       todoMgr,
