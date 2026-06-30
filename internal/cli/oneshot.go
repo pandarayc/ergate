@@ -66,7 +66,7 @@ func truncateToolInput(toolName, input string) string {
 	return input
 }
 
-func RunOneShot(eng *engine.Engine, prompt string) error {
+func RunOneShot(eng *engine.Engine, prompt string, quiet bool) error {
 	events := make(chan engine.Event, 128)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -90,6 +90,13 @@ func RunOneShot(eng *engine.Engine, prompt string) error {
 	}()
 
 	for event := range events {
+		// Quiet mode: only output final text + errors. Skip thinking, tools, turns.
+		if quiet && event.Type != engine.EventText &&
+			event.Type != engine.EventError &&
+			event.Type != engine.EventDone &&
+			event.Type != engine.EventAborted {
+			continue
+		}
 		switch event.Type {
 		case engine.EventText:
 			if text, ok := event.Data.(string); ok {

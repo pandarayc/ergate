@@ -12,6 +12,7 @@ import (
 var (
 	configPath string
 	headless   bool
+	quiet      bool
 	modelName  string
 	prompt     string
 	resume     bool
@@ -36,6 +37,7 @@ Default mode is interactive TUI. Use -p for one-shot queries, --headless for raw
 	cmd.Flags().StringVarP(&modelName, "model", "m", "", "Override the model name")
 	cmd.Flags().StringVarP(&prompt, "prompt", "p", "", "One-shot query (non-interactive)")
 	cmd.Flags().BoolVarP(&resume, "resume", "r", false, "Resume the latest session")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "Quiet mode: only output final text, no thinking/tool events")
 	cmd.Flags().BoolP("version", "v", false, "Show version")
 
 	cmd.AddCommand(BenchCmd())
@@ -56,7 +58,7 @@ func runApp(cmd *cobra.Command, args []string) error {
 
 	// One-shot mode
 	if prompt != "" {
-		return runOneShot(cfg, prompt)
+		return runOneShot(cfg, prompt, quiet)
 	}
 
 	// Auto-detect: headless if stdin not a terminal
@@ -88,7 +90,7 @@ func runTUI(cfg *appconfig.Config) error {
 }
 
 // runOneShot executes a single prompt and prints the result.
-func runOneShot(cfg *appconfig.Config, prompt string) error {
+func runOneShot(cfg *appconfig.Config, prompt string, quiet bool) error {
 	client, registry, skillReg, todoMgr, err := SetupEngine(cfg)
 	if err != nil {
 		return err
@@ -96,7 +98,7 @@ func runOneShot(cfg *appconfig.Config, prompt string) error {
 	defer client.Close()
 
 	eng := CreateEngine(cfg, client, registry, skillReg, todoMgr)
-	return RunOneShot(eng, prompt)
+	return RunOneShot(eng, prompt, quiet)
 }
 
 // isTerminal checks if stdin is a terminal.
