@@ -261,6 +261,9 @@ func benchmarkHooks() *hooks.Manager {
 	// early turns confuses the model more than it helps. Prompt-level
 	// guidance (Working Style section) is the right layer.
 	m.Register(hooks.NewToolRedirect())
+	// LoopDetector warns after 3+ consecutive same-pattern calls.
+	// Doesn't block — just injects guidance. Counter resets on strategy change.
+	m.Register(hooks.NewLoopDetector(3))
 	return m
 }
 
