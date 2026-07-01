@@ -257,7 +257,9 @@ func loadLatestSessionFile(dir string) *session.Session {
 
 func benchmarkHooks() *hooks.Manager {
 	m := hooks.NewManager()
-	m.Register(hooks.NewPhaseEnforcer(3))
+	// PhaseEnforcer intentionally removed — intercepting tool calls during
+	// early turns confuses the model more than it helps. Prompt-level
+	// guidance (Working Style section) is the right layer.
 	m.Register(hooks.NewToolRedirect())
 	return m
 }
