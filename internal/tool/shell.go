@@ -17,7 +17,12 @@ var bashSchema = Schema(map[string]any{
 	"timeout":     map[string]any{"type": "number", "description": "Timeout in milliseconds (default 120000)"},
 }, []string{"command"})
 
-const bashDescription = `Execute a bash command in the terminal. Use for running tests, building projects, installing dependencies, and git operations. Returns stdout and stderr output with exit code. Do NOT use for reading files (use Read), searching file contents (use Grep), finding files (use Glob), or writing/editing files (use Write/Edit) — the dedicated tools return structured results with better safety checks.`
+const bashDescription = "Execute a bash command in the terminal. " +
+	"Use for running tests, building projects, installing dependencies, and git operations. " +
+	"Returns stdout and stderr output with exit code. " +
+	"IMPORTANT: Avoid using this tool to run `cat`, `head`, `tail`, `sed`, `awk`, or `echo` commands, " +
+	"unless explicitly instructed or after you have verified that a dedicated tool cannot accomplish your task. " +
+	"Instead, use Read to read files, Write/Edit to modify files, Glob to find files, and Grep to search file contents."
 
 // BashTool executes shell commands.
 type BashTool struct {
@@ -125,6 +130,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage, execCtx *
 }
 
 // IsReadOnly checks if the command appears to be read-only.
+// `cat`, `head`, `tail`, `grep`, `find`, and `echo` are intentionally
+// excluded — those should use Read/Glob/Grep tools instead and will
+// be rejected by IsShellSafe.
 func (t *BashTool) IsReadOnly(input json.RawMessage) bool {
 	var in bashInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -132,11 +140,10 @@ func (t *BashTool) IsReadOnly(input json.RawMessage) bool {
 	}
 
 	cmd := strings.TrimSpace(in.Command)
-	// Simple heuristic: commands starting with common read-only operations
 	readOnlyPrefixes := []string{
-		"ls ", "cat ", "head ", "tail ", "grep ", "find ", "wc ", "du ",
-		"git log", "git status", "git diff", "git show",
-		"echo ", "pwd", "whoami", "which ", "type ",
+		"ls ", "wc ", "du ",
+		"git log", "git status", "git diff", "git show", "git stash list",
+		"pwd", "whoami", "which ", "type ",
 		"ps ", "top ", "df ", "free ", "uname ",
 		"go test", "go build", "go vet", "go list",
 		"cargo test", "cargo check", "cargo build",
@@ -169,7 +176,6 @@ func isText(data []byte) bool {
 	if len(data) == 0 {
 		return true
 	}
-	// Check first 8KB for null bytes (binary indicator)
 	checkLen := len(data)
 	if checkLen > 8192 {
 		checkLen = 8192
@@ -191,7 +197,7 @@ type limitedWriter struct {
 func (w *limitedWriter) Write(p []byte) (int, error) {
 	remaining := w.limit - w.buf.Len()
 	if remaining <= 0 {
-		return len(p), nil // discard silently
+		return len(p), nil
 	}
 	if len(p) > remaining {
 		p = p[:remaining]

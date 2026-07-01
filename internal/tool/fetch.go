@@ -18,7 +18,7 @@ var fetchSchema = Schema(map[string]any{
 	"prompt": map[string]any{"type": "string", "description": "What information you want to extract from the page"},
 }, []string{"url", "prompt"})
 
-const fetchDescription = `Fetch a web page. SECONDARY tool — prefer local sources first. For downloading files, use Bash with curl/wget (those respect HTTP_PROXY). HTTP upgraded to HTTPS. Use ONLY when the task explicitly requires external information not available locally.`
+const fetchDescription = `Fetch a web page and answer a question against it. Use when you need to read external documentation or web content. For downloading files, use Bash with curl/wget.`
 
 // WebFetchTool fetches content from URLs.
 type WebFetchTool struct {

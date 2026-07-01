@@ -665,6 +665,24 @@ func (e *Engine) executeTools(ctx context.Context, toolUses []llm.ToolUseBlock, 
 			chainItems = append(chainItems, e.makeToolChainItem(tu, result, execErr))
 		}
 
+		// Emit tool result so CLI / bench can observe rejections and output.
+		if result != nil || execErr != nil {
+			evtData := map[string]any{}
+			if result != nil {
+				evtData["content"] = result.Content
+				evtData["is_error"] = !result.Success
+			}
+			if execErr != nil {
+				evtData["content"] = execErr.Error()
+				evtData["is_error"] = true
+			}
+			events <- Event{
+				Type: EventToolResult,
+				Data: evtData,
+				Turn: turn,
+			}
+		}
+
 		e.firePostToolHook(ctx, tu, result, execErr)
 		e.checkSkillTriggers(tu, events, turn)
 	}

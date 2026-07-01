@@ -14,7 +14,7 @@ var writeSchema = Schema(map[string]any{
 	"content":   map[string]any{"type": "string", "description": "The content to write to the file"},
 }, []string{"file_path", "content"})
 
-const writeDescription = `Write a file to the local filesystem. Returns path, line count, and first-line preview — clearer than cat heredoc output. Use for creating or overwriting files. Parent directories are created automatically.`
+const writeDescription = `Writes a file to the local filesystem. Creates parent directories automatically. Returns file path, line count, size, and first-line preview. Use for creating or overwriting files.`
 
 // WriteTool writes file contents.
 type WriteTool struct {

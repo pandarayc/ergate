@@ -57,6 +57,7 @@ type Result struct {
 	Error      string           `json:"error,omitempty"`
 	Duration   time.Duration    `json:"duration"`
 	SessionID  string           `json:"session_id,omitempty"`
+	DebugLog   string           `json:"debug_log,omitempty"`
 }
 
 type Runner struct {
@@ -95,13 +96,42 @@ func (r *Runner) Run(ctx context.Context, task *Task) *Result {
 
 	eng := r.createEngine(workDir, sessionDir, transcriptDir)
 
+	var logBuf strings.Builder
 	events := make(chan engine.Event, 256)
 	runErr := make(chan error, 1)
 	go func() { runErr <- eng.Run(ctx, task.Instruction, events) }()
-	for range events {}
+	for event := range events {
+		switch event.Type {
+		case engine.EventToolUse:
+			if data, ok := event.Data.(map[string]any); ok {
+				name, _ := data["name"].(string)
+				input, _ := data["input"].(string)
+				fmt.Fprintf(&logBuf, "[Tool: %s] %s\n", name, truncateToolInput(name, input))
+			}
+		case engine.EventToolResult:
+			if data, ok := event.Data.(map[string]any); ok {
+				isErr, _ := data["is_error"].(bool)
+				content, _ := data["content"].(string)
+				if isErr {
+					firstLine := content
+					if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+						firstLine = content[:idx]
+					}
+					fmt.Fprintf(&logBuf, "[Tool Error] %s\n", firstLine)
+				} else if content != "" {
+					firstLine := content
+					if idx := strings.IndexByte(content, '\n'); idx >= 0 {
+						firstLine = content[:idx]
+					}
+					fmt.Fprintf(&logBuf, "[Tool Result] %s\n", firstLine)
+				}
+			}
+		}
+	}
 	if err := <-runErr; err != nil {
 		res.Error = fmt.Sprintf("engine: %v", err)
 	}
+	res.DebugLog = logBuf.String()
 
 	res.SessionID = eng.SessionID()
 
@@ -230,4 +260,29 @@ func benchmarkHooks() *hooks.Manager {
 	m.Register(hooks.NewPhaseEnforcer(3))
 	m.Register(hooks.NewToolRedirect())
 	return m
+}
+
+// truncateToolInput returns a short display string for a tool input.
+// For Bash, it extracts the "command" field. Otherwise it truncates.
+func truncateToolInput(toolName, input string) string {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(input), &parsed); err != nil {
+		if len(input) > 200 {
+			return input[:200] + "..."
+		}
+		return input
+	}
+	switch toolName {
+	case "Bash":
+		if cmd, ok := parsed["command"].(string); ok {
+			if len(cmd) > 200 {
+				return cmd[:200] + "..."
+			}
+			return cmd
+		}
+	}
+	if len(input) > 200 {
+		return input[:200] + "..."
+	}
+	return input
 }

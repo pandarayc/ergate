@@ -32,7 +32,7 @@ func NewEvaluateTool() *EvaluateTool {
 	return &EvaluateTool{
 		BaseTool: NewBaseTool(
 			"Evaluate",
-			"Check your work AFTER writing or editing code. Spawns a read-only sub-agent that runs a verification command and returns structured pass/fail with error details. Unlike Bash, the sub-agent CANNOT modify files — it's a pure verifier. Use after every Write/Edit that changes compilable code: write → Evaluate → fix errors → repeat. The sub-agent only runs commands and reports results.",
+			"Verify your code changes by running a compile/test command in a read-only sub-agent. Returns structured PASS/FAIL with first error extracted. Use after Write/Edit to confirm correctness before moving on.",
 			json.RawMessage(evaluateSchema),
 			WithReadOnly(),
 			WithConcurrencySafe(),

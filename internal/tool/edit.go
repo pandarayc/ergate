@@ -15,7 +15,7 @@ var editSchema = Schema(map[string]any{
 	"replace_all": map[string]any{"type": "boolean", "description": "Replace all occurrences of old_string (default false)"},
 }, []string{"file_path", "old_string", "new_string"})
 
-const editDescription = `Performs exact string replacements in files. When editing text, ensure you preserve the exact indentation (tabs/spaces) as it appears before. The edit will fail if old_string is not unique in the file. Use replace_all to replace every instance of old_string.`
+const editDescription = `Performs exact string replacement in an existing file. You must Read the file first. The edit fails if old_string is not unique — provide more surrounding context to make it unique, or use replace_all to replace every occurrence.`
 
 // EditTool performs search-and-replace in files.
 type EditTool struct {
