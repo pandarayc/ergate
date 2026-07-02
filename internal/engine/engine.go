@@ -250,12 +250,32 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 
 	e.addUserMessage(input)
 
-	for turn := 1; turn <= e.cfg.MaxTurns; turn++ {
+	// TurnBudget tracks soft limits — warns at 80%, final warning at 100%.
+	// Hard stop only after the final warning turn has been used.
+	turnBudget := NewTurnBudget(e.cfg.MaxTurns)
+
+	for turn := 1; ; turn++ {
 		select {
 		case <-ctx.Done():
 			events <- Event{Type: EventAborted, Data: ctx.Err()}
 			return ctx.Err()
 		default:
+		}
+
+		// Check turn budget BEFORE executing the turn.
+		// A warning transition injects a reminder message but lets the turn proceed.
+		// A terminal transition stops the loop.
+		transition := turnBudget.Check(turn)
+		if transition != nil {
+			switch transition.Reason {
+			case TerminalMaxTurns:
+				events <- Event{Type: EventDone, Data: transition}
+				return nil
+			case ContinueBudgetWarning:
+				// Inject budget reminder as a system-level user message.
+				// The model sees "You have N turns remaining" and adjusts pace.
+				e.addBudgetReminder(transition.Detail)
+			}
 		}
 
 		e.pollTaskNotifications(ctx, events, turn)
@@ -264,9 +284,12 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 
 		hasTools, err := e.singleTurn(ctx, events, turn)
 		if err != nil {
+			events <- Event{Type: EventError, Data: err, Turn: turn}
 			return err
 		}
 		if !hasTools {
+			// Model stopped naturally — no more tool calls.
+			events <- Event{Type: EventDone, Data: &Transition{Reason: TerminalCompleted, Turn: turn, Detail: "model returned no tools"}}
 			return nil
 		}
 
@@ -277,11 +300,20 @@ func (e *Engine) Run(ctx context.Context, input string, events chan<- Event) err
 			}
 		}
 
-		events <- Event{Type: EventTurnEnd, Turn: turn}
+		// Emit turn-end with the transition reason so observers
+		// (CLI, bench) can distinguish normal vs warning turns.
+		reason := ContinueNextTurn
+		if transition != nil {
+			reason = transition.Reason
+		}
+		events <- Event{Type: EventTurnEnd, Turn: turn, Data: reason}
 	}
+}
 
-	events <- Event{Type: EventDone, Data: "max_turns_reached"}
-	return nil
+// addBudgetReminder injects a turn-budget reminder as a user message
+// so the model sees it as part of the conversation context.
+func (e *Engine) addBudgetReminder(message string) {
+	e.addUserMessage(message)
 }
 
 // singleTurn performs one API call + tool execution. Returns true if tools
@@ -1172,13 +1204,25 @@ func (e *Engine) RunSubAgent(ctx context.Context, prompt, model string, maxTurns
 
 	e.addUserMessage(prompt)
 
-	for turn := 1; turn <= maxTurns; turn++ {
+	turnBudget := NewTurnBudget(maxTurns)
+	for turn := 1; ; turn++ {
 		select {
 		case <-ctx.Done():
 			e.restoreSubAgent(originalTools, originalModel, originalMaxTurns)
 			events <- Event{Type: EventAborted, Data: ctx.Err()}
 			return ctx.Err()
 		default:
+		}
+
+		// Check turn budget
+		transition := turnBudget.Check(turn)
+		if transition != nil && transition.Reason == TerminalMaxTurns {
+			e.restoreSubAgent(originalTools, originalModel, originalMaxTurns)
+			events <- Event{Type: EventDone, Data: transition}
+			return nil
+		}
+		if transition != nil && transition.Reason == ContinueBudgetWarning {
+			e.addUserMessage(transition.Detail)
 		}
 
 		hasTools, err := e.singleTurn(ctx, events, turn)
@@ -1188,10 +1232,15 @@ func (e *Engine) RunSubAgent(ctx context.Context, prompt, model string, maxTurns
 		}
 		if !hasTools {
 			e.restoreSubAgent(originalTools, originalModel, originalMaxTurns)
+			events <- Event{Type: EventDone, Data: &Transition{Reason: TerminalCompleted, Turn: turn, Detail: "sub-agent completed"}}
 			return nil
 		}
 
-		events <- Event{Type: EventTurnEnd, Turn: turn}
+		reason := ContinueNextTurn
+		if transition != nil {
+			reason = transition.Reason
+		}
+		events <- Event{Type: EventTurnEnd, Turn: turn, Data: reason}
 	}
 
 	e.restoreSubAgent(originalTools, originalModel, originalMaxTurns)

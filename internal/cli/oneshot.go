@@ -140,7 +140,11 @@ func RunOneShot(eng *engine.Engine, prompt string, quiet bool) error {
 				}
 			}
 		case engine.EventTurnEnd:
-			fmt.Fprintf(os.Stderr, "[Turn %d end]\n", event.Turn)
+			if reason, ok := event.Data.(engine.TurnReason); ok && reason != engine.ContinueNextTurn {
+				fmt.Fprintf(os.Stderr, "[Turn %d end — %s]\n", event.Turn, reason)
+			} else {
+				fmt.Fprintf(os.Stderr, "[Turn %d end]\n", event.Turn)
+			}
 		case engine.EventError:
 			if err, ok := event.Data.(error); ok {
 				fmt.Fprintf(os.Stderr, "[Error: %v]\n", err)
@@ -148,6 +152,9 @@ func RunOneShot(eng *engine.Engine, prompt string, quiet bool) error {
 		case engine.EventAborted:
 			fmt.Fprintf(os.Stderr, "[Aborted: %v]\n", event.Data)
 		case engine.EventDone:
+			if transition, ok := event.Data.(*engine.Transition); ok {
+				fmt.Fprintf(os.Stderr, "[Done: %s — %s]\n", transition.Reason, transition.Detail)
+			}
 			fmt.Fprintln(os.Stderr)
 			return nil
 		}
